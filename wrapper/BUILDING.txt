@@ -3,7 +3,8 @@ Experimental local build
 Source was extracted from upstream Thanos-Wrapper source.zip.
 The current build reaches menus and displays a 3D scene in DOOM: The Dark Ages
 on GTX 1080 Ti / NVIDIA 582.28. The user confirmed normal operation on 2026-11-03.
-Full-game stability, FSR compatibility and other GPUs remain unverified.
+A later gameplay session ended in a confirmed GPU device-loss hang after about
+30 minutes. The GPU fault remains unresolved; FSR and other GPUs are unverified.
 
 Build on Windows with PowerShell, llvm-mingw x86_64 and Vulkan-Headers:
 
@@ -15,13 +16,14 @@ Output: build\vulkan-1.dll and build\probe.exe. Generated binaries are ignored b
 The GNU assembly export thunks are generated from exports_cpp.inc.
 Existing Visual Studio project and MASM files are retained.
 
-Read-only GPU / dispatch probe:
+GPU / dispatch probe:
 
   .\build\probe.exe
 
 This uses the system Vulkan loader and prints native capabilities. It creates a
-device and queries a one-triangle acceleration structure size without submitting
-GPU work. Exit 77 means no suitable GPU was tested, not a passing test.
+device, queries a one-triangle acceleration structure size, and submits a small
+timestamp command buffer if the selected queue supports timestamps. The fence
+wait is bounded at five seconds. Exit 77 means no suitable GPU was tested.
 
 Wrapper probe:
 
@@ -31,6 +33,20 @@ Wrapper probe:
 The probe verifies recursive resolver identity, agreement between advertised
 rayQuery features and extensions, and a real AS size query through the proxy.
 It does not validate game shaders, rendering, ray queries or Float16 emulation.
+
+Runtime diagnostics regression test:
+
+  .\build.ps1 -Toolchain C:\path\to\llvm-mingw -VulkanHeaders C:\path\to\Vulkan-Headers -BuildTests
+  .\build\runtime_diagnostics_test.exe
+
+Run once with RuntimeTrace=0 (or no INI) and once with RuntimeTrace=1 in
+build\Thanos-wrapper.ini. It uses synthetic API functions, verifies unchanged
+query arguments, output data and native error results, and tests bounded fault
+capture with device-handle reuse. It does not force a real GPU fault.
+
+RuntimeTrace=1 in the [diagnostics] section enables runtime error/heartbeat logs
+and native VK_EXT_device_fault reporting when supported. It does not recover
+a lost device, change query results or automatically terminate the application.
 
 Changes in this branch:
 - Preserve wrapper resolvers and extension enumeration when obtained through GIPA.

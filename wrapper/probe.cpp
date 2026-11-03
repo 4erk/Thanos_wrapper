@@ -67,6 +67,9 @@ int wmain(int argc, wchar_t** argv) {
         auto hasExtension=[&](const char* name) {for(const auto& e:ep) if(!strcmp(e.extensionName,name)) return true; return false;};
         for(auto e:ep) if(strstr(e.extensionName,"ray_")||strstr(e.extensionName,"acceleration")||strstr(e.extensionName,"deferred")||strstr(e.extensionName,"pipeline_library")||strstr(e.extensionName,"mesh_shader")) printf("%s\n",e.extensionName);
         printf("NV mesh shader extension=%d\n",hasExtension(VK_NV_MESH_SHADER_EXTENSION_NAME));
+        printf("Diagnostic checkpoints=%d device fault=%d\n",
+            hasExtension(VK_NV_DEVICE_DIAGNOSTIC_CHECKPOINTS_EXTENSION_NAME),
+            hasExtension(VK_EXT_DEVICE_FAULT_EXTENSION_NAME));
         if (wrapper && rq.rayQuery && !hasExtension(VK_KHR_RAY_QUERY_EXTENSION_NAME)) {
             puts("FAIL: feature and extension enumeration disagree"); return 9;
         }
@@ -120,6 +123,43 @@ int wmain(int argc, wchar_t** argv) {
         sizes(device,VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,&bi,&primitives,&result);
         printf("AS size=%llu scratch=%llu\n",(unsigned long long)result.accelerationStructureSize,(unsigned long long)result.buildScratchSize);
         if (!result.accelerationStructureSize) return 8;
+        // Exercise actual queue execution and query/fence forwarding, with a
+        // bounded host wait. This still does not validate DOOM's shaders.
+        if (qp[qi].timestampValidBits) {
+            VkQueue queue{};
+            ((PFN_vkGetDeviceQueue)nested(device,"vkGetDeviceQueue"))(device,qi,0,&queue);
+            VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO}; pci.queueFamilyIndex=qi;
+            VkCommandPool pool{};
+            if (((PFN_vkCreateCommandPool)nested(device,"vkCreateCommandPool"))(device,&pci,nullptr,&pool)!=VK_SUCCESS) return 20;
+            VkCommandBufferAllocateInfo cai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+            cai.commandPool=pool; cai.level=VK_COMMAND_BUFFER_LEVEL_PRIMARY; cai.commandBufferCount=1;
+            VkCommandBuffer cb{};
+            if (((PFN_vkAllocateCommandBuffers)nested(device,"vkAllocateCommandBuffers"))(device,&cai,&cb)!=VK_SUCCESS) return 21;
+            VkQueryPoolCreateInfo qpi{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO}; qpi.queryType=VK_QUERY_TYPE_TIMESTAMP; qpi.queryCount=2;
+            VkQueryPool queries{};
+            if (((PFN_vkCreateQueryPool)nested(device,"vkCreateQueryPool"))(device,&qpi,nullptr,&queries)!=VK_SUCCESS) return 22;
+            VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+            if (((PFN_vkBeginCommandBuffer)nested(device,"vkBeginCommandBuffer"))(cb,&begin)!=VK_SUCCESS) return 23;
+            ((PFN_vkCmdResetQueryPool)nested(device,"vkCmdResetQueryPool"))(cb,queries,0,2);
+            auto timestamp=(PFN_vkCmdWriteTimestamp)nested(device,"vkCmdWriteTimestamp");
+            timestamp(cb,VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,queries,0);
+            timestamp(cb,VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,queries,1);
+            if (((PFN_vkEndCommandBuffer)nested(device,"vkEndCommandBuffer"))(cb)!=VK_SUCCESS) return 24;
+            VkFenceCreateInfo fci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO}; VkFence fence{};
+            if (((PFN_vkCreateFence)nested(device,"vkCreateFence"))(device,&fci,nullptr,&fence)!=VK_SUCCESS) return 25;
+            VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO}; si.commandBufferCount=1; si.pCommandBuffers=&cb;
+            r=((PFN_vkQueueSubmit)nested(device,"vkQueueSubmit"))(queue,1,&si,fence);
+            if(r!=VK_SUCCESS) {printf("FAIL: submit=%d\n",r);return 26;}
+            r=((PFN_vkWaitForFences)nested(device,"vkWaitForFences"))(device,1,&fence,VK_TRUE,5000000000ull);
+            if(r!=VK_SUCCESS) {printf("FAIL: bounded fence wait=%d\n",r);return 27;}
+            uint64_t values[2]{};
+            r=((PFN_vkGetQueryPoolResults)nested(device,"vkGetQueryPoolResults"))(device,queries,0,2,sizeof(values),values,8,VK_QUERY_RESULT_64_BIT);
+            if(r!=VK_SUCCESS) {printf("FAIL: GPU query=%d\n",r);return 28;}
+            printf("PASS: native GPU submit, fence and timestamp query (%llu, %llu)\n",values[0],values[1]);
+            ((PFN_vkDestroyFence)nested(device,"vkDestroyFence"))(device,fence,nullptr);
+            ((PFN_vkDestroyQueryPool)nested(device,"vkDestroyQueryPool"))(device,queries,nullptr);
+            ((PFN_vkDestroyCommandPool)nested(device,"vkDestroyCommandPool"))(device,pool,nullptr);
+        }
         ((PFN_vkDestroyDevice)nested(device,"vkDestroyDevice"))(device,nullptr);
         ++tested;
     }

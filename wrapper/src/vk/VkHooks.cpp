@@ -4,6 +4,7 @@
 #include "VkProxyState.h"
 #include "RtFallback.h"
 #include "ShaderDiagnostics.h"
+#include "RuntimeDiagnostics.h"
 
 
 #include "../log/Log.h"
@@ -26,7 +27,7 @@
 #include <type_traits>
 using namespace thanosray::log;
 static const char* kVkHooksBuildId =
-"VkHooks.cpp BUILD_ID 4erk-doom-native-rt-4";
+"VkHooks.cpp BUILD_ID 4erk-doom-runtime-diag-5";
 // ---- Forward decls (must appear AFTER Vulkan types are visible) ----
 
 // ============================================================================
@@ -1577,7 +1578,7 @@ if (std::strcmp(pName, "vkCmdClearColorImage") == 0) {
 
 
 
-            return diagnostics::Wrap(pName, fn);
+            return runtime::Wrap(pName, diagnostics::Wrap(pName, fn));
         }
 
         static PFN_vkVoidFunction VKAPI_CALL Hook_vkGetInstanceProcAddr(VkInstance instance, const char* pName)
@@ -1653,7 +1654,7 @@ if (std::strcmp(pName, "vkCmdClearColorImage") == 0) {
             }
 
 
-            return diagnostics::Wrap(pName, fn);
+            return runtime::Wrap(pName, diagnostics::Wrap(pName, fn));
         }
 
         static bool IsRtExt(const char* n)
@@ -2003,8 +2004,10 @@ if (std::strcmp(pName, "vkCmdClearColorImage") == 0) {
                 VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR};
             VkPhysicalDeviceRayTracingPipelineFeaturesKHR nativeRT{
                 VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR};
+            VkPhysicalDeviceFaultFeaturesEXT nativeFault{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT};
             nativeFeatures.pNext = &nativeAS;
             nativeAS.pNext = &nativeRT;
+            nativeRT.pNext = &nativeFault;
             if (st.real_vkGetPhysicalDeviceFeatures2)
                 st.real_vkGetPhysicalDeviceFeatures2(physicalDevice, &nativeFeatures);
             const bool useNativeAS = nativeAS.accelerationStructure &&
@@ -2012,6 +2015,8 @@ if (std::strcmp(pName, "vkCmdClearColorImage") == 0) {
                 driverSupported.count(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
             const bool useNativeRT = useNativeAS && nativeRT.rayTracingPipeline &&
                 driverSupported.count(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME);
+            const bool useDeviceFault = runtime::Enabled() && nativeFault.deviceFault &&
+                driverSupported.count(VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
             auto addExtension = [&](const char* name) {
                 if (std::none_of(driverExts.begin(), driverExts.end(),
                     [&](const char* old) { return std::strcmp(old, name) == 0; }))
@@ -2022,6 +2027,7 @@ if (std::strcmp(pName, "vkCmdClearColorImage") == 0) {
                 addExtension(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME);
             }
             if (useNativeRT) addExtension(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME);
+            if (useDeviceFault) addExtension(VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
             thanosray::log::Logf("[NATIVE-RT] accelerationStructure=%d rayTracingPipeline=%d",
                 useNativeAS, useNativeRT);
 
@@ -2036,6 +2042,11 @@ if (std::strcmp(pName, "vkCmdClearColorImage") == 0) {
             const void* sanitizedPNext = BuildSanitizedDeviceCreatePNext(
                 physicalDevice, pCreateInfo->pNext, pnextStorage);
 
+            if (useDeviceFault) {
+                nativeFault.deviceFaultVendorBinary = VK_FALSE;
+                nativeFault.pNext = const_cast<void*>(sanitizedPNext);
+                sanitizedPNext = &nativeFault;
+            }
             if (useNativeRT) {
                 nativeRT.pNext = const_cast<void*>(sanitizedPNext);
                 sanitizedPNext = &nativeRT;
@@ -2055,6 +2066,8 @@ if (std::strcmp(pName, "vkCmdClearColorImage") == 0) {
             thanosray::log::Logf("[vkCreateDevice] calling real vkCreateDevice...");
             VkResult r = st.real_vkCreateDevice(physicalDevice, &patched, pAllocator, pDevice);
             thanosray::log::Logf("[vkCreateDevice] real returned: %d", (int)r);
+            if (r == VK_SUCCESS)
+                runtime::OnDeviceCreated(*pDevice, st.real_vkGetDeviceProcAddr, useDeviceFault);
 
             EnsureShadowLiftDefaultsLate();
             return r;
@@ -3600,7 +3613,7 @@ static VkResult VKAPI_CALL Hook_vkQueuePresentKHR(VkQueue queue, const VkPresent
         {
             const char* const* names = ExportNameTable();
             for (int i = 0; i < kProcTableSize; ++i)
-                g_procTable[i] = (void*)diagnostics::Wrap(names[i], (PFN_vkVoidFunction)g_procTable[i]);
+                g_procTable[i] = (void*)runtime::Wrap(names[i], diagnostics::Wrap(names[i], (PFN_vkVoidFunction)g_procTable[i]));
             static bool once = false;
             if (!once) {
                 once = true;

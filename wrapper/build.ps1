@@ -1,7 +1,8 @@
 param(
     [Parameter(Mandatory=$true)][string]$Toolchain,
     [Parameter(Mandatory=$true)][string]$VulkanHeaders,
-    [switch]$BuildProbe
+    [switch]$BuildProbe,
+    [switch]$BuildTests
 )
 $ErrorActionPreference = 'Stop'
 $outDir = Join-Path $PSScriptRoot 'build'
@@ -28,5 +29,12 @@ if ($BuildProbe) {
     & $compiler -std=c++20 -static -municode -I (Join-Path $VulkanHeaders 'include') `
         (Join-Path $PSScriptRoot 'probe.cpp') -o (Join-Path $outDir 'probe.exe')
     if ($LASTEXITCODE -ne 0) { throw "Probe compilation failed: $LASTEXITCODE" }
+}
+if ($BuildTests) {
+    & $compiler -std=c++20 -static -DUNICODE -D_UNICODE -DNOMINMAX -D_MINGW_USE_SECAPI=1 `
+        -I (Join-Path $VulkanHeaders 'include') `
+        (Join-Path $PSScriptRoot 'tests/runtime_diagnostics.cpp') (Join-Path $PSScriptRoot 'src/log/Log.cpp') `
+        -o (Join-Path $outDir 'runtime_diagnostics_test.exe')
+    if ($LASTEXITCODE -ne 0) { throw "Runtime test compilation failed: $LASTEXITCODE" }
 }
 Get-FileHash (Join-Path $outDir 'vulkan-1.dll')
