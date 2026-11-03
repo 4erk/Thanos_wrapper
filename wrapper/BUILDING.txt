@@ -1,0 +1,43 @@
+Experimental local build
+
+Source was extracted from upstream Thanos-Wrapper source.zip.
+The current changes do NOT make DOOM: The Dark Ages playable on GTX 1080 Ti.
+
+Build on Windows with PowerShell, llvm-mingw x86_64 and Vulkan-Headers:
+
+  .\build.ps1 -Toolchain C:\path\to\llvm-mingw -VulkanHeaders C:\path\to\Vulkan-Headers -BuildProbe
+
+Tested compiler: llvm-mingw 20261020 UCRT x86_64.
+Tested headers: Vulkan-Headers 1.4.335.
+Output: build\vulkan-1.dll and build\probe.exe. Generated binaries are ignored by Git.
+The GNU assembly export thunks are generated from exports_cpp.inc.
+Existing Visual Studio project and MASM files are retained.
+
+Read-only GPU / dispatch probe:
+
+  .\build\probe.exe
+
+This uses the system Vulkan loader and prints native capabilities. It creates a
+device and queries a one-triangle acceleration structure size without submitting
+GPU work. Exit 77 means no suitable GPU was tested, not a passing test.
+
+Wrapper probe:
+
+  Copy-Item "$env:WINDIR\System32\vulkan-1.dll" .\build\vulkan-1_real.dll
+  .\build\probe.exe "$PWD\build\vulkan-1.dll"
+
+The probe verifies recursive resolver identity, agreement between advertised
+rayQuery features and extensions, and a real AS size query through the proxy.
+It does not validate game shaders, rendering, ray queries or Float16 emulation.
+
+Changes in this branch:
+- Preserve wrapper resolvers and extension enumeration when obtained through GIPA.
+- Preserve the wrapper GDPA when it is requested through itself.
+- Keep copied pNext nodes at stable addresses.
+- Preserve Vulkan 1.3 and the NV feature nodes requested by the tested game.
+- Enable the driver's supported native AS / RT pipeline feature subset.
+- Support building with llvm-mingw and report proc requests without logging an
+  unresolved placeholder as though it were the final resolution result.
+
+The upstream feature spoofing, no-op RT paths and other unfinished compatibility
+code remain experimental. This is not a complete Vulkan implementation.

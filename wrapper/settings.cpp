@@ -1,5 +1,5 @@
 //#include "pch.h"
-#include "Settings.h"
+#include "settings.h"
 #include "src/log/Log.h"
 
 #define WIN32_LEAN_AND_MEAN
@@ -7,6 +7,7 @@
 
 #include <string>
 #include <fstream>
+#include <filesystem>
 #include <sstream>
 #include <mutex>
 #include <algorithm>
@@ -108,7 +109,7 @@ namespace thanosray {
 
     static void WriteDefaultIni(const std::wstring& path, const Settings& def)
     {
-        std::ofstream f(path, std::ios::out | std::ios::trunc);
+        std::ofstream f(std::filesystem::path(path), std::ios::out | std::ios::trunc);
         if (!f.is_open()) return;
 
         f <<
@@ -144,7 +145,7 @@ namespace thanosray {
 
     static Settings LoadIniInto(Settings base, const std::wstring& path)
     {
-        std::ifstream f(path);
+        std::ifstream f{std::filesystem::path(path)};
         if (!f.is_open()) return base;
 
         std::string line;

@@ -25,7 +25,7 @@
 #include <type_traits>
 using namespace thanosray::log;
 static const char* kVkHooksBuildId =
-"VkHooks.cpp BUILD_ID 2026-01-22_32"; // <-- change this string each rebuild
+"VkHooks.cpp BUILD_ID 4erk-doom-dispatch-2";
 // ---- Forward decls (must appear AFTER Vulkan types are visible) ----
 
 // ============================================================================
@@ -1256,6 +1256,10 @@ static VkResult VKAPI_CALL Hook_vkAcquireNextImage2KHR(
         {
             auto& st = State();
             PFN_vkVoidFunction fn = nullptr;
+            // Engines may replace their resolver with the pointer obtained from
+            // the resolver itself. Keep that path inside the proxy as well.
+            if (device && pName && std::strcmp(pName, "vkGetDeviceProcAddr") == 0)
+                return (PFN_vkVoidFunction)&Hook_vkGetDeviceProcAddr;
 /*
             auto IsRtName = [](const char* n) -> bool {
                 if (!n) return false;
@@ -1279,10 +1283,9 @@ static VkResult VKAPI_CALL Hook_vkAcquireNextImage2KHR(
 
                 thanosray::log::LogOncef(
                     key,
-                    "[RTPROBE][GDPA] dev=%p name=%s resolved=%p",
+                    "[RTPROBE][GDPA] dev=%p request=%s",
                     (void*)device,
-                    pName ? pName : "(null)",
-                    (void*)fn
+                    pName ? pName : "(null)"
                 );
             }
 
@@ -1319,7 +1322,8 @@ static VkResult VKAPI_CALL Hook_vkAcquireNextImage2KHR(
                 }
 
 
-                return fn;
+                // Continue to the wrapper's dispatch table. An unsupported driver
+                // command can still have an explicitly implemented wrapper hook.
             }
 
             // 3) Now log what we actually resolved
@@ -1590,6 +1594,10 @@ if (std::strcmp(pName, "vkCmdClearColorImage") == 0) {
             if (st.real_vkGetInstanceProcAddr) {
                 fn = st.real_vkGetInstanceProcAddr(instance, pName);
             }
+            if (pName && (!fn || IsRtName(pName))) {
+                thanosray::log::Logf("[GIPA-DIAG] instance=%p name=%s real=%p",
+                    (void*)instance, pName, (void*)fn);
+            }
 
             // ============================================================================
 // ============================================================================
@@ -1614,6 +1622,13 @@ if (std::strcmp(pName, "vkCmdClearColorImage") == 0) {
 
 
             if (!pName) return fn;
+
+            if (std::strcmp(pName, "vkGetInstanceProcAddr") == 0 && fn)
+                return (PFN_vkVoidFunction)&Hook_vkGetInstanceProcAddr;
+            if (std::strcmp(pName, "vkGetDeviceProcAddr") == 0 && instance && fn)
+                return (PFN_vkVoidFunction)&Hook_vkGetDeviceProcAddr;
+            if (std::strcmp(pName, "vkEnumerateDeviceExtensionProperties") == 0 && instance && fn)
+                return (PFN_vkVoidFunction)&Hook_vkEnumerateDeviceExtensionProperties;
 
             if (std::strcmp(pName, "vkGetPhysicalDeviceProperties2") == 0 ||
                 std::strcmp(pName, "vkGetPhysicalDeviceProperties2KHR") == 0) {
@@ -1686,6 +1701,7 @@ if (std::strcmp(pName, "vkCmdClearColorImage") == 0) {
             case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2: return "PHYSICAL_DEVICE_FEATURES_2";
             case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES: return "VULKAN_1_1_FEATURES";
             case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES: return "VULKAN_1_2_FEATURES";
+            case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES: return "VULKAN_1_3_FEATURES";
             case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES: return "BUFFER_DEVICE_ADDRESS_FEATURES";
             case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES: return "SHADER_FLOAT16_INT8_FEATURES";
             case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_8BIT_STORAGE_FEATURES: return "8BIT_STORAGE_FEATURES";
@@ -1730,11 +1746,11 @@ if (std::strcmp(pName, "vkCmdClearColorImage") == 0) {
         }
 
         template <typename T>
-        static T* AppendCopy(std::vector<uint8_t>& blob, const T* src)
+        static T* AppendCopy(std::vector<std::vector<uint8_t>>& blob, const T* src)
         {
-            size_t off = blob.size();
-            blob.resize(off + sizeof(T));
-            T* dst = reinterpret_cast<T*>(blob.data() + off);
+            // Separate allocations keep pNext pointers stable as the chain grows.
+            blob.emplace_back(sizeof(T));
+            T* dst = reinterpret_cast<T*>(blob.back().data());
             std::memcpy(dst, src, sizeof(T));
             return dst;
         }
@@ -1779,10 +1795,10 @@ if (std::strcmp(pName, "vkCmdClearColorImage") == 0) {
         static const void* BuildSanitizedDeviceCreatePNext(
             VkPhysicalDevice phys,
             const void* originalPNext,
-            std::vector<uint8_t>& storage)
+            std::vector<std::vector<uint8_t>>& storage)
         {
             storage.clear();
-            storage.reserve(1024);
+            storage.reserve(16);
 
             const RealFeatPack real = QueryRealFeatures(phys);
 
@@ -1854,6 +1870,26 @@ if (std::strcmp(pName, "vkCmdClearColorImage") == 0) {
                     dst->bufferDeviceAddressCaptureReplay &= real.bda.bufferDeviceAddressCaptureReplay;
                     dst->bufferDeviceAddressMultiDevice &= real.bda.bufferDeviceAddressMultiDevice;
                     copied = (VkBaseInStructure*)dst;
+                    break;
+                }
+
+                case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES: {
+                    // The wrapper does not spoof these features. Dropping this
+                    // node silently disables synchronization2 and dynamic rendering.
+                    copied = (VkBaseInStructure*)AppendCopy(storage,
+                        (const VkPhysicalDeviceVulkan13Features*)src);
+                    break;
+                }
+
+                case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEDICATED_ALLOCATION_IMAGE_ALIASING_FEATURES_NV: {
+                    copied = (VkBaseInStructure*)AppendCopy(storage,
+                        (const VkPhysicalDeviceDedicatedAllocationImageAliasingFeaturesNV*)src);
+                    break;
+                }
+
+                case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_INVOCATION_REORDER_FEATURES_NV: {
+                    copied = (VkBaseInStructure*)AppendCopy(storage,
+                        (const VkPhysicalDeviceRayTracingInvocationReorderFeaturesNV*)src);
                     break;
                 }
 
@@ -1965,6 +2001,37 @@ if (std::strcmp(pName, "vkCmdClearColorImage") == 0) {
                 driverExts.push_back(n);
             }
 
+            // Pascal exposes native AS/RT pipeline entry points even though it
+            // lacks rayQuery and Float16. The upstream proxy advertises RT but
+            // strips all RT extensions/features. Restore the supported native
+            // subset; this alone does not make DOOM's RT initialization succeed.
+            VkPhysicalDeviceFeatures2 nativeFeatures{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+            VkPhysicalDeviceAccelerationStructureFeaturesKHR nativeAS{
+                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR};
+            VkPhysicalDeviceRayTracingPipelineFeaturesKHR nativeRT{
+                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR};
+            nativeFeatures.pNext = &nativeAS;
+            nativeAS.pNext = &nativeRT;
+            if (st.real_vkGetPhysicalDeviceFeatures2)
+                st.real_vkGetPhysicalDeviceFeatures2(physicalDevice, &nativeFeatures);
+            const bool useNativeAS = nativeAS.accelerationStructure &&
+                driverSupported.count(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME) &&
+                driverSupported.count(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
+            const bool useNativeRT = useNativeAS && nativeRT.rayTracingPipeline &&
+                driverSupported.count(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME);
+            auto addExtension = [&](const char* name) {
+                if (std::none_of(driverExts.begin(), driverExts.end(),
+                    [&](const char* old) { return std::strcmp(old, name) == 0; }))
+                    driverExts.push_back(name);
+            };
+            if (useNativeAS) {
+                addExtension(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
+                addExtension(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME);
+            }
+            if (useNativeRT) addExtension(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME);
+            thanosray::log::Logf("[NATIVE-RT] accelerationStructure=%d rayTracingPipeline=%d",
+                useNativeAS, useNativeRT);
+
             thanosray::log::Logf("[vkCreateDevice] passing(driver)=%u", (uint32_t)driverExts.size());
             for (size_t i = 0; i < driverExts.size(); ++i) {
                 thanosray::log::Logf("  pass[%zu]=%s", i, driverExts[i]);
@@ -1972,9 +2039,18 @@ if (std::strcmp(pName, "vkCmdClearColorImage") == 0) {
 
             DumpInChain(pCreateInfo->pNext, "[vkCreateDevice] original");
 
-            std::vector<uint8_t> pnextStorage;
+            std::vector<std::vector<uint8_t>> pnextStorage;
             const void* sanitizedPNext = BuildSanitizedDeviceCreatePNext(
                 physicalDevice, pCreateInfo->pNext, pnextStorage);
+
+            if (useNativeRT) {
+                nativeRT.pNext = const_cast<void*>(sanitizedPNext);
+                sanitizedPNext = &nativeRT;
+            }
+            if (useNativeAS) {
+                nativeAS.pNext = const_cast<void*>(sanitizedPNext);
+                sanitizedPNext = &nativeAS;
+            }
 
             DumpInChain(sanitizedPNext, "[vkCreateDevice] sanitized");
 
