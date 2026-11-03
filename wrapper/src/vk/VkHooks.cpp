@@ -3,6 +3,7 @@
 #include "VkProxyExports.h"
 #include "VkProxyState.h"
 #include "RtFallback.h"
+#include "ShaderDiagnostics.h"
 
 
 #include "../log/Log.h"
@@ -25,7 +26,7 @@
 #include <type_traits>
 using namespace thanosray::log;
 static const char* kVkHooksBuildId =
-"VkHooks.cpp BUILD_ID 4erk-doom-dispatch-2";
+"VkHooks.cpp BUILD_ID 4erk-doom-pascal-3";
 // ---- Forward decls (must appear AFTER Vulkan types are visible) ----
 
 // ============================================================================
@@ -635,51 +636,37 @@ static VkResult VKAPI_CALL Hook_vkAcquireNextImage2KHR(
 
             PollHotkeys();
 
-            uint32_t capacity = (pProperties && pPropertyCount) ? *pPropertyCount : 0;
-
-            VkResult r = st.real_vkEnumerateDeviceExtensionProperties(
-                physicalDevice, pLayerName, pPropertyCount, pProperties);
-
-            if (!pPropertyCount) return r;
-
-            // Count query
+            if (!pPropertyCount || pLayerName)
+                return st.real_vkEnumerateDeviceExtensionProperties(physicalDevice, pLayerName, pPropertyCount, pProperties);
+            uint32_t count = 0;
+            VkResult r = st.real_vkEnumerateDeviceExtensionProperties(physicalDevice, nullptr, &count, nullptr);
+            if (r != VK_SUCCESS) return r;
+            std::vector<VkExtensionProperties> extensions(count);
+            r = st.real_vkEnumerateDeviceExtensionProperties(physicalDevice, nullptr, &count, extensions.data());
+            if (r != VK_SUCCESS) return r;
+            extensions.resize(count);
+            auto append = [&](const char* name) {
+                if (!HasExtension(extensions.data(), (uint32_t)extensions.size(), name)) {
+                    VkExtensionProperties prop{};
+                    WriteExtension(prop, name, 1);
+                    extensions.push_back(prop);
+                }
+            };
+            for (const char* name : kSpoofExts) append(name);
+            // Diagnostic opt-in: isolates DOOM's NVIDIA RT-loader gate. This is
+            // not a mesh-shader implementation; mesh feature bits stay native.
+            if (diagnostics::PascalGateExperiment()) {
+                append(VK_NV_MESH_SHADER_EXTENSION_NAME);
+                thanosray::log::LogOncef("pascal-gate", "[EXPERIMENT] NV_mesh_shader name exposed for RT initialization; no mesh emulation");
+            }
             if (!pProperties) {
-                *pPropertyCount += kSpoofExtCount;
-                thanosray::log::Logf("[EXT] Count query: +%u spoof extensions (baseline+RT)", kSpoofExtCount);
-                return r;
+                *pPropertyCount = (uint32_t)extensions.size();
+                return VK_SUCCESS;
             }
-
-            uint32_t realCount = *pPropertyCount;
-
-            bool missing[kSpoofExtCount] = {};
-            uint32_t missingCount = 0;
-            for (uint32_t i = 0; i < kSpoofExtCount; i++) {
-                if (!HasExtension(pProperties, realCount, kSpoofExts[i])) {
-                    missing[i] = true;
-                    missingCount++;
-                }
-            }
-
-            if (missingCount == 0) return r;
-
-            uint32_t required = realCount + missingCount;
-            if (capacity < required) {
-                *pPropertyCount = required;
-                thanosray::log::Logf("[EXT] Not enough space: need %u, had %u -> VK_INCOMPLETE", required, capacity);
-                return VK_INCOMPLETE;
-            }
-
-            uint32_t outIndex = realCount;
-            for (uint32_t i = 0; i < kSpoofExtCount; i++) {
-                if (missing[i]) {
-                    WriteExtension(pProperties[outIndex], kSpoofExts[i], 1);
-                    outIndex++;
-                }
-            }
-
-            thanosray::log::Logf("[EXT] Injected %u spoof extensions into enumerate output", missingCount);
-            *pPropertyCount = outIndex;
-            return r;
+            const uint32_t copied = std::min(*pPropertyCount, (uint32_t)extensions.size());
+            std::copy_n(extensions.data(), copied, pProperties);
+            *pPropertyCount = copied;
+            return copied < extensions.size() ? VK_INCOMPLETE : VK_SUCCESS;
         }
 
         static thread_local bool g_inProps2 = false;
@@ -1584,7 +1571,7 @@ if (std::strcmp(pName, "vkCmdClearColorImage") == 0) {
 
 
 
-            return fn;
+            return diagnostics::Wrap(pName, fn);
         }
 
         static PFN_vkVoidFunction VKAPI_CALL Hook_vkGetInstanceProcAddr(VkInstance instance, const char* pName)
@@ -1660,7 +1647,7 @@ if (std::strcmp(pName, "vkCmdClearColorImage") == 0) {
             }
 
 
-            return fn;
+            return diagnostics::Wrap(pName, fn);
         }
 
         static bool IsRtExt(const char* n)
@@ -3605,6 +3592,9 @@ static VkResult VKAPI_CALL Hook_vkQueuePresentKHR(VkQueue queue, const VkPresent
 
         void InstallHooks()
         {
+            const char* const* names = ExportNameTable();
+            for (int i = 0; i < kProcTableSize; ++i)
+                g_procTable[i] = (void*)diagnostics::Wrap(names[i], (PFN_vkVoidFunction)g_procTable[i]);
             static bool once = false;
             if (!once) {
                 once = true;

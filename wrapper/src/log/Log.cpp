@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <mutex>
 #include <unordered_set>
+#include <share.h>
 
 namespace thanosray::log {
 
@@ -19,7 +20,8 @@ namespace thanosray::log {
 
 static FILE* g_file = nullptr;
 static LONG  g_lines = 0;
-static const LONG kMaxLines = 8000;
+static const LONG kMaxLines = 64000;
+static std::mutex g_fileMtx;
 
 static char g_fileName[MAX_PATH] = { 0 };
 
@@ -49,7 +51,7 @@ static void EnsureOpen()
         sprintf_s(g_fileName, "%svkproxy_%lu.log", dllPath[0] ? dllPath : "", (unsigned long)pid);
     }
 
-    fopen_s(&g_file, g_fileName, "w");
+    g_file = _fsopen(g_fileName, "w", _SH_DENYNO);
     if (!g_file) return;
 
     // Unbuffered: keep lines even if the game crashes.
@@ -83,6 +85,7 @@ void Logf(const char* fmt, ...)
         return;
     }
 
+    std::lock_guard<std::mutex> lock(g_fileMtx);
     EnsureOpen();
     if (!g_file) return;
 
@@ -110,11 +113,6 @@ static uint64_t HashKey64(const char* s)
 
 bool LogOncef(const char* uniqueKey, const char* fmt, ...)
 {
-    // Still respect max line cap.
-    if (InterlockedIncrement(&g_lines) > kMaxLines) {
-        return false;
-    }
-
     const uint64_t hk = HashKey64(uniqueKey ? uniqueKey : "");
     {
         std::lock_guard<std::mutex> lock(g_onceMtx);
@@ -124,6 +122,8 @@ bool LogOncef(const char* uniqueKey, const char* fmt, ...)
         g_onceKeys.insert(hk);
     }
 
+    if (InterlockedIncrement(&g_lines) > kMaxLines) return false;
+    std::lock_guard<std::mutex> lock(g_fileMtx);
     EnsureOpen();
     if (!g_file) return false;
 

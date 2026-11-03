@@ -44,6 +44,26 @@ int wmain(int argc, wchar_t** argv) {
         printf("Float16=%u BDA=%u sync2=%u rendering=%u AS=%u RTpipeline=%u rayQuery=%u\n",v12.shaderFloat16,v12.bufferDeviceAddress,v13.synchronization2,v13.dynamicRendering,as.accelerationStructure,rt.rayTracingPipeline,rq.rayQuery);
         uint32_t n=0;exts(p,nullptr,&n,nullptr);std::vector<VkExtensionProperties> ep(n);exts(p,nullptr,&n,ep.data());
         ep.resize(n);
+        if (wrapper) {
+            uint32_t expected = 0;
+            if (exts(p, nullptr, &expected, nullptr) != VK_SUCCESS || expected != n) {
+                puts("FAIL: extension count query disagrees with returned array"); return 10;
+            }
+            VkExtensionProperties shortList[2]{};
+            std::memset(&shortList[1], 0x5a, sizeof(shortList[1]));
+            uint32_t capacity = 1;
+            if (n > 1 && (exts(p, nullptr, &capacity, shortList) != VK_INCOMPLETE || capacity != 1)) {
+                puts("FAIL: truncated enumeration count/result"); return 11;
+            }
+            const auto* sentinel = reinterpret_cast<const unsigned char*>(&shortList[1]);
+            for (size_t i = 0; i < sizeof(shortList[1]); ++i)
+                if (sentinel[i] != 0x5a) { puts("FAIL: enumeration overflow"); return 12; }
+            capacity = 0;
+            if (n && (exts(p, nullptr, &capacity, shortList) != VK_INCOMPLETE || capacity)) {
+                puts("FAIL: zero-capacity enumeration"); return 13;
+            }
+            puts("PASS: exact and bounded extension enumeration");
+        }
         auto hasExtension=[&](const char* name) {for(const auto& e:ep) if(!strcmp(e.extensionName,name)) return true; return false;};
         for(auto e:ep) if(strstr(e.extensionName,"ray_")||strstr(e.extensionName,"acceleration")||strstr(e.extensionName,"deferred")||strstr(e.extensionName,"pipeline_library")||strstr(e.extensionName,"mesh_shader")) printf("%s\n",e.extensionName);
         printf("NV mesh shader extension=%d\n",hasExtension(VK_NV_MESH_SHADER_EXTENSION_NAME));
