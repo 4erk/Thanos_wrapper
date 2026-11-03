@@ -26,7 +26,7 @@
 #include <type_traits>
 using namespace thanosray::log;
 static const char* kVkHooksBuildId =
-"VkHooks.cpp BUILD_ID 4erk-doom-pascal-3";
+"VkHooks.cpp BUILD_ID 4erk-doom-native-rt-4";
 // ---- Forward decls (must appear AFTER Vulkan types are visible) ----
 
 // ============================================================================
@@ -157,8 +157,8 @@ namespace thanosray {
             DWORD n = GetEnvironmentVariableA("THR_SHADOW_LIFT", buf, sizeof(buf));
 
             if (n == 0) {
-                // Default: subtle but very visible lift
-                SetEnvironmentVariableA("THR_SHADOW_LIFT", "0.30");
+                // Postprocessing must remain opt-in; do not alter game images.
+                SetEnvironmentVariableA("THR_SHADOW_LIFT", "0.00");
                 SetEnvironmentVariableA("THR_SHADOW_TOE", "0.00");
                 SetEnvironmentVariableA("THR_SHADOW_CEIL", "1.00");
 
@@ -248,6 +248,9 @@ static PFN_vkGetBufferDeviceAddress            g_real_vkGetBufferDeviceAddress =
 static PFN_vkGetBufferDeviceAddressKHR         g_real_vkGetBufferDeviceAddressKHR = nullptr;
 
 #ifdef VK_KHR_ray_tracing_pipeline
+static PFN_vkCmdTraceRaysKHR g_real_vkCmdTraceRaysKHR = nullptr;
+static PFN_vkCmdTraceRaysIndirectKHR g_real_vkCmdTraceRaysIndirectKHR = nullptr;
+static PFN_vkCmdTraceRaysIndirect2KHR g_real_vkCmdTraceRaysIndirect2KHR = nullptr;
 static PFN_vkCreateRayTracingPipelinesKHR      g_real_vkCreateRayTracingPipelinesKHR = nullptr;
 static PFN_vkGetRayTracingShaderGroupHandlesKHR g_real_vkGetRayTracingShaderGroupHandlesKHR = nullptr;
 static PFN_vkGetRayTracingShaderGroupHandlesKHR g_real_vkGetRayTracingShaderGroupHandlesKHR2 = nullptr; // alias if needed
@@ -940,35 +943,24 @@ static VkResult VKAPI_CALL Hook_vkAcquireNextImage2KHR(
                 (float)g_sl_ceil.load());
         }
 
-        // LANDMARK RF40: vkCmdTraceRaysKHR interception point
-        // - Still a NO-OP for true RT, BUT now we:
-        //   (1) log bound candidate RT outputs
-        //   (2) optionally apply a safe "ambient clear" (Phase 0b) if enabled in settings
+        // Preserve native ray dispatch. The driver supports RT pipelines on
+        // Pascal; replacing dispatch with debug clears destroys their output.
         // ============================================================================
 
         static void VKAPI_CALL Hook_vkCmdTraceRaysKHR(
             VkCommandBuffer commandBuffer,
-            const VkStridedDeviceAddressRegionKHR*,
-            const VkStridedDeviceAddressRegionKHR*,
-            const VkStridedDeviceAddressRegionKHR*,
-            const VkStridedDeviceAddressRegionKHR*,
-            uint32_t, uint32_t, uint32_t)
+            const VkStridedDeviceAddressRegionKHR* raygen,
+            const VkStridedDeviceAddressRegionKHR* miss,
+            const VkStridedDeviceAddressRegionKHR* hit,
+            const VkStridedDeviceAddressRegionKHR* callable,
+            uint32_t width, uint32_t height, uint32_t depth)
         {
-            static bool logged = false;
-            if (!logged) {
-                thanosray::log::Logf("[RT] vkCmdTraceRaysKHR intercepted (fallback tracking enabled)");
-                logged = true;
+            if (g_real_vkCmdTraceRaysKHR) {
+                thanosray::log::LogOncef("native.trace.direct", "[RT] Native vkCmdTraceRaysKHR %ux%ux%u", width, height, depth);
+                g_real_vkCmdTraceRaysKHR(commandBuffer, raygen, miss, hit, callable, width, height, depth);
+                return;
             }
-            static uint32_t s_calls = 0;
-            uint32_t c = ++s_calls;
-            if (c <= 10) {
-                thanosray::log::Logf("[RT] vkCmdTraceRaysKHR CALLED cb=%p (%u)", (void*)commandBuffer, c);
-            }
-
-            // This does not crash if it can't do anything — it will just log.
-            (void)thanosray::vk::rtfb::OnCmdTraceRaysKHR(commandBuffer);
-            thanosray::vk::DebugLiftAfterTraceRays(commandBuffer);
-
+            thanosray::log::LogOncef("native.trace.missing", "[RT] ERROR: native vkCmdTraceRaysKHR unavailable");
         }
 
 
@@ -978,25 +970,27 @@ static VkResult VKAPI_CALL Hook_vkAcquireNextImage2KHR(
 
         static void VKAPI_CALL Hook_vkCmdTraceRaysIndirectKHR(
             VkCommandBuffer commandBuffer,
-            const VkStridedDeviceAddressRegionKHR*,
-            const VkStridedDeviceAddressRegionKHR*,
-            const VkStridedDeviceAddressRegionKHR*,
-            const VkStridedDeviceAddressRegionKHR*,
-            VkDeviceAddress)
+            const VkStridedDeviceAddressRegionKHR* raygen,
+            const VkStridedDeviceAddressRegionKHR* miss,
+            const VkStridedDeviceAddressRegionKHR* hit,
+            const VkStridedDeviceAddressRegionKHR* callable,
+            VkDeviceAddress address)
         {
-            static bool logged = false;
-            if (!logged) { thanosray::log::Logf("[RT] vkCmdTraceRaysIndirectKHR intercepted"); logged = true; }
-            (void)thanosray::vk::rtfb::OnCmdTraceRaysKHR(commandBuffer);
+            if (g_real_vkCmdTraceRaysIndirectKHR) {
+                thanosray::log::LogOncef("native.trace.indirect", "[RT] Native vkCmdTraceRaysIndirectKHR");
+                g_real_vkCmdTraceRaysIndirectKHR(commandBuffer, raygen, miss, hit, callable, address);
+            }
         }
 
         // Newer KHR entrypoint some engines use (if headers support it)
         static void VKAPI_CALL Hook_vkCmdTraceRaysIndirect2KHR(
             VkCommandBuffer commandBuffer,
-            VkDeviceAddress)
+            VkDeviceAddress address)
         {
-            static bool logged = false;
-            if (!logged) { thanosray::log::Logf("[RT] vkCmdTraceRaysIndirect2KHR intercepted"); logged = true; }
-            (void)thanosray::vk::rtfb::OnCmdTraceRaysKHR(commandBuffer);
+            if (g_real_vkCmdTraceRaysIndirect2KHR) {
+                thanosray::log::LogOncef("native.trace.indirect2", "[RT] Native vkCmdTraceRaysIndirect2KHR");
+                g_real_vkCmdTraceRaysIndirect2KHR(commandBuffer, address);
+            }
         }
 
 
@@ -1037,7 +1031,9 @@ static VkResult VKAPI_CALL Hook_vkAcquireNextImage2KHR(
                 }
                 return VK_ERROR_FEATURE_NOT_PRESENT;
             }
-            return g_real_vkCreateRayTracingPipelinesKHR(device, deferredOperation, pipelineCache, createInfoCount, pCreateInfos, pAllocator, pPipelines);
+            VkResult result = g_real_vkCreateRayTracingPipelinesKHR(device, deferredOperation, pipelineCache, createInfoCount, pCreateInfos, pAllocator, pPipelines);
+            thanosray::log::Logf("[PIPELINE] raytracing count=%u result=%d", createInfoCount, result);
+            return result;
         }
 
         static VkResult VKAPI_CALL Hook_vkGetRayTracingShaderGroupHandlesKHR(
@@ -1359,8 +1355,16 @@ static VkResult VKAPI_CALL Hook_vkAcquireNextImage2KHR(
             // ----------------------------------------------------------------
 
             if (std::strcmp(pName, "vkCmdTraceRaysKHR") == 0) {
-                thanosray::log::Logf("[GDPA] providing stub: %s", pName);
-                return (PFN_vkVoidFunction)&Hook_vkCmdTraceRaysKHR;
+                g_real_vkCmdTraceRaysKHR = (PFN_vkCmdTraceRaysKHR)fn;
+                return fn ? (PFN_vkVoidFunction)&Hook_vkCmdTraceRaysKHR : nullptr;
+            }
+            if (std::strcmp(pName, "vkCmdTraceRaysIndirectKHR") == 0) {
+                g_real_vkCmdTraceRaysIndirectKHR = (PFN_vkCmdTraceRaysIndirectKHR)fn;
+                return fn ? (PFN_vkVoidFunction)&Hook_vkCmdTraceRaysIndirectKHR : nullptr;
+            }
+            if (std::strcmp(pName, "vkCmdTraceRaysIndirect2KHR") == 0) {
+                g_real_vkCmdTraceRaysIndirect2KHR = (PFN_vkCmdTraceRaysIndirect2KHR)fn;
+                return fn ? (PFN_vkVoidFunction)&Hook_vkCmdTraceRaysIndirect2KHR : nullptr;
             }
             // ----------------------------------------------------------------
 // LANDMARK RTFB-GDPA: Provide RTFB tracking hooks via vkGetDeviceProcAddr
@@ -1382,7 +1386,8 @@ static VkResult VKAPI_CALL Hook_vkAcquireNextImage2KHR(
                         thanosray::log::Logf("[GDPA] captured real: %s=%p", name, (void*)fn);
                     }
 
-                    thanosray::log::Logf("[GDPA] returning hook: %s", name);
+                    std::string key = std::string("gdpa.hook:") + name;
+                    thanosray::log::LogOncef(key.c_str(), "[GDPA] returning hook: %s", name);
                     return hook;
                 };
                // 
@@ -1398,7 +1403,8 @@ static VkResult VKAPI_CALL Hook_vkAcquireNextImage2KHR(
                         *outReal = (void*)fn;
                         thanosray::log::Logf("[GDPA] captured real: %s=%p", name, (void*)fn);
                     }
-                    thanosray::log::Logf("[GDPA] returning hook: %s", name);
+                    std::string key = std::string("gdpa.hook:") + name;
+                    thanosray::log::LogOncef(key.c_str(), "[GDPA] returning hook: %s", name);
                     return hook;
                 };
                 
@@ -1634,16 +1640,16 @@ if (std::strcmp(pName, "vkCmdClearColorImage") == 0) {
                 return (PFN_vkVoidFunction)&Hook_vkCreateDevice;
             }
             if (std::strcmp(pName, "vkCmdTraceRaysKHR") == 0) {
-                thanosray::log::Logf("[GPA] app requested vkCmdTraceRaysKHR -> returning hook");
-                return (PFN_vkVoidFunction)&Hook_vkCmdTraceRaysKHR;
+                g_real_vkCmdTraceRaysKHR = (PFN_vkCmdTraceRaysKHR)fn;
+                return fn ? (PFN_vkVoidFunction)&Hook_vkCmdTraceRaysKHR : nullptr;
             }
             if (std::strcmp(pName, "vkCmdTraceRaysIndirectKHR") == 0) {
-                thanosray::log::Logf("[GPA] app requested vkCmdTraceRaysIndirectKHR -> returning hook");
-                return (PFN_vkVoidFunction)&Hook_vkCmdTraceRaysIndirectKHR;
+                g_real_vkCmdTraceRaysIndirectKHR = (PFN_vkCmdTraceRaysIndirectKHR)fn;
+                return fn ? (PFN_vkVoidFunction)&Hook_vkCmdTraceRaysIndirectKHR : nullptr;
             }
             if (std::strcmp(pName, "vkCmdTraceRaysIndirect2KHR") == 0) {
-                thanosray::log::Logf("[GPA] app requested vkCmdTraceRaysIndirect2KHR -> returning hook");
-                return (PFN_vkVoidFunction)&Hook_vkCmdTraceRaysIndirect2KHR;
+                g_real_vkCmdTraceRaysIndirect2KHR = (PFN_vkCmdTraceRaysIndirect2KHR)fn;
+                return fn ? (PFN_vkVoidFunction)&Hook_vkCmdTraceRaysIndirect2KHR : nullptr;
             }
 
 
@@ -3772,22 +3778,10 @@ static VkResult VKAPI_CALL Hook_vkQueuePresentKHR(VkQueue queue, const VkPresent
 // --------------------------------------------------------------------
         static void TryShadowLiftFromAcquire(VkDevice device, VkSwapchainKHR swapchain, uint32_t imageIndex)
         {
-            // Quick opt-out (keeps overhead near zero when disabled)
-            if (ShadowLiftStrength() <= 0.0f) return;
-            static bool once = false;
-           // if (!once) { once = true; thanosray::log::Logf("[SL] Acquire injection DISABLED (TryShadowLiftFromAcquire early-return)"); }
-          //  return;
-
-
-            VkQueue q = VK_NULL_HANDLE;
-            {
-                std::lock_guard<std::mutex> lk(g_shadowMtx);
-                auto dit = g_shadowDev.find(device);
-                if (dit != g_shadowDev.end()) q = dit->second.presentQueue;
-            }
-            if (!q) return;
-            // Best-effort: ApplyShadowLift will validate swapchain/images and fail-open.
-            ApplyShadowLiftToSwapchainImage(q,nullptr, swapchain, imageIndex);
+            // Image acquisition signals a semaphore asynchronously. Touching the
+            // image here without waiting on it races the renderer/presentation.
+            // Any explicitly enabled postprocess belongs in the present path.
+            (void)device; (void)swapchain; (void)imageIndex;
         }
 
         static VkResult VKAPI_CALL Hook_vkAcquireNextImageKHR(

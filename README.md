@@ -1,11 +1,55 @@
-# Thanos_wrapper
-A vulkan wrapper that allows games that require ray tracing to run on older gpu's that don't have native support
-Unfortunately i've had no luck brightening up the shadowed areas. You'll have to use reShade until I can figure it out or someone else can help me out with the issue.
+# Thanos Wrapper — DOOM: The Dark Ages / Pascal
 
-to install, you gotta copy "vulkan-1.dll" from your c:\windows\system32 folder to your game's exe folder, then rename it to "vulkan-1_real.dll", Then unzip the wrapper to the game folder as well. Run the game, but don't expect it to run the first time, especially if you have a low amount of vram (was tested with Indiana Jones and the great circle on a GTX 1050ti)
+Экспериментальная Vulkan-обёртка для **DOOM: The Dark Ages на NVIDIA GTX 1080 Ti**. Форк [jase212007/Thanos_wrapper](https://github.com/jase212007/Thanos_wrapper).
 
+**3 ноября 2026 года подтверждены запуск, меню и появление 3D-сцены на GTX 1080 Ti. Пользователь сообщил о нормальной работе.** Полное прохождение, длительная стабильность и производительность ещё не проверены. Совместимость со всей серией GTX 10xx не заявляется.
 
-GTX 980ti screenshot https://raw.githubusercontent.com/jase212007/Thanos_wrapper/refs/heads/main/20260128_164255.jpg
+[Скачать v0.1.0-pascal.1](https://github.com/4erk/Thanos_wrapper/releases/tag/v0.1.0-pascal.1) · [Установка и откат](docs/INSTALL.ru.md) · [English installation](docs/INSTALL.en.md) · [Изменения](CHANGELOG.md) · [Технические детали](docs/TECHNICAL.md)
 
+## Быстрая установка
 
-  apparently there's a glitch where the gtx 1660 super and potentially the 1660 and ti and rtx gpu's do not work. Due to then have partial ray tracing support the wrapper fails to properly work on those devices. (although It linux does allow ray tracing on them in much the same way as AMD GPU's do.) I have a version that should work on those devices, if you have trouble with the main version try this one.
+1. Закройте игру и сохраните копии уже установленных Vulkan-обёрток.
+2. Скопируйте системную `C:\Windows\System32\vulkan-1.dll` в папку с `DOOMTheDarkAges.exe`, назвав копию **`vulkan-1_real.dll`**.
+3. Поместите туда `vulkan-1.dll` и `Thanos-wrapper.ini` из релизного архива. В INI должен быть включён `PascalRTGate=1`.
+4. Запустите игру. Для первой проверки оставьте FSR выключенным. Загрузка и появление сцены могут занять время.
+
+Используйте архив из **Releases**. ZIP-файлы в корне репозитория унаследованы от оригинального проекта и не содержат исправления этого форка. Системную DLL заменять не нужно.
+
+## Проверенная конфигурация
+
+| Компонент | Проверено |
+| --- | --- |
+| GPU | NVIDIA GeForce GTX 1080 Ti, 11 GB |
+| Драйвер | NVIDIA 582.28 |
+| CPU / RAM | Ryzen 5 5600X / 64 GB |
+| ОС | Windows x64 |
+| Игра | DOOM: The Dark Ages, бинарная сборка `20260623-171103-ginger-citrine` |
+| Результат | Запуск, меню и 3D-сцена; пользователь подтвердил нормальную работу |
+
+## Исправления
+
+- Сохранение обёртки при повторном получении адресов Vulkan-функций.
+- Корректное перечисление расширений и стабильная цепочка параметров создания устройства.
+- Сохранение доступных драйверу acceleration structures и RT pipelines.
+- Отдельный режим совместимости с проверкой инициализации RT в DOOM на Pascal.
+- Передача настоящих вызовов трассировки драйверу вместо пропуска и отладочной очистки изображений.
+- Отключение автоматического осветления и вмешательства в изображение при его получении из swapchain.
+
+## Ограничения
+
+- Чёрный экран наблюдался после включения FSR вместе с дополнительной динамической настройкой графики. Отдельные переключатели ещё не изолированы; исправление FSR не заявляется.
+- Режим `PascalRTGate` объявляет имя `VK_NV_mesh_shader`, сохраняя реальные биты mesh-функций. Mesh-шейдеры не эмулируются.
+- Драйвер GTX 1080 Ti сообщает отсутствие `shaderFloat16` и `rayQuery`. Полноценного преобразования этих шейдеров здесь нет. Отдельные сцены или настройки могут не работать.
+- GTX 1060/1070/1080, GTX 16xx, RTX и другие игры этим релизом не проверены. Цифры FPS и обещания качества освещения не публикуются.
+
+## Разработка и диагностика
+
+Исходники находятся в `wrapper/`. [Инструкция по сборке](wrapper/BUILDING.txt) описывает llvm-mingw, Vulkan-Headers и тест загрузчика. Этот тест не заменяет проверку игры.
+
+В issue укажите GPU, драйвер, сборку игры, релиз обёртки и шаги воспроизведения. Лог `vkproxy_<PID>.log` создаётся рядом с DLL. Просмотрите его перед публикацией; дампы памяти и игровые шейдеры в публичные issues не загружайте.
+
+## Происхождение
+
+Основа — работа [jase212007](https://github.com/jase212007/Thanos_wrapper). [Оригинальный README](docs/UPSTREAM_README.md) сохранён отдельно. Это не официальное исправление id Software, Bethesda, NVIDIA или AMD.
+
+**English:** Experimental DOOM: The Dark Ages compatibility fork for GTX 1080 Ti. Startup, menus and a 3D scene confirmed on NVIDIA 582.28. Full-game stability, FSR and other GPUs remain unverified. See the [English guide](docs/INSTALL.en.md).

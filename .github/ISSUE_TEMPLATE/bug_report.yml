@@ -1,0 +1,28 @@
+name: Bug report / Ошибка
+description: Report a reproducible wrapper problem.
+body:
+  - type: input
+    id: hardware
+    attributes:
+      label: GPU and NVIDIA driver version
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Game build and wrapper release
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps and graphics settings
+      description: Include FSR status, visible output and whether a previous release worked.
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Relevant wrapper log lines
+      description: Review logs before sharing. Do not upload memory dumps or proprietary game shaders.
+      render: text

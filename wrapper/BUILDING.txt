@@ -1,8 +1,9 @@
 Experimental local build
 
 Source was extracted from upstream Thanos-Wrapper source.zip.
-The current build reaches the DOOM: The Dark Ages menu on GTX 1080 Ti.
-Level loading and rendering are still being tested; playability is unconfirmed.
+The current build reaches menus and displays a 3D scene in DOOM: The Dark Ages
+on GTX 1080 Ti / NVIDIA 582.28. The user confirmed normal operation on 2026-11-03.
+Full-game stability, FSR compatibility and other GPUs remain unverified.
 
 Build on Windows with PowerShell, llvm-mingw x86_64 and Vulkan-Headers:
 
@@ -40,7 +41,7 @@ Changes in this branch:
 - Support building with llvm-mingw and report proc requests without logging an
   unresolved placeholder as though it were the final resolution result.
 
-The upstream feature spoofing, no-op RT paths and other unfinished compatibility
+The upstream feature spoofing and other unfinished compatibility
 code remain experimental. This is not a complete Vulkan implementation.
 
 Pascal RT initialization experiment (off by default):
@@ -68,3 +69,22 @@ Observed in development run 5: menu displayed, 1051 shader modules captured;
 These counts do not prove successful execution of every shader. Native Float16
 and rayQuery feature queries still report unsupported; there is no lowering
 implementation in this branch.
+
+Native RT rendering correction (development run 6):
+- Forward direct/indirect vkCmdTraceRays calls to the driver's real entry points.
+- Remove automatic RT output debug clears from the dispatch path.
+- Keep ShadowLift disabled unless explicitly enabled and never submit it while
+  acquiring a swapchain image, before acquisition synchronization has completed.
+- Record native RT pipeline creation results; allow reading logs while running.
+
+The menu-only build still swallowed ray dispatches. The user reported no 3D
+image and a black screen after changing FSR and another graphics setting. The
+captured FSR3 shaders are FP32, so attributing that issue to FP16 is unsupported.
+
+Release artifact provenance:
+v0.1.0-pascal.1 retains the exact game-tested DLL, SHA256
+7c642055f5920eafb70d7f6c5035720171aa3ff672fa2efdc0421a0462609eee.
+The final source cleanup only removes unreachable acquire-postprocess code and
+updates comments. A rebuild matched the tested DLL's .text, .rdata, .data,
+.pdata, .tls and .reloc sections byte-for-byte. Linker build-id/debug metadata
+differs. The package script checks the tested DLL hash before packaging.

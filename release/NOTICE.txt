@@ -1,0 +1,19 @@
+Thanos Wrapper / DOOM: The Dark Ages Pascal fork
+
+Original wrapper: jase212007/Thanos_wrapper
+https://github.com/jase212007/Thanos_wrapper
+Fork: 4erk/Thanos_wrapper
+https://github.com/4erk/Thanos_wrapper
+
+Original project attribution is retained in docs/UPSTREAM_README.md.
+No new repository-wide license is assigned to the original author's code.
+
+The Windows binary is built with llvm-mingw and statically linked runtimes.
+Corresponding LLVM and MinGW runtime notices are included under licenses/.
+Vulkan API headers are supplied separately for source builds:
+https://github.com/KhronosGroup/Vulkan-Headers
+
+This distribution does not include the system Vulkan loader, game files,
+proprietary shader captures, user settings, crash dumps or user logs.
+This is an independent compatibility experiment, not an official product of
+id Software, Bethesda, NVIDIA or AMD.

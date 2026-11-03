@@ -1,4 +1,6 @@
 /wrapper/build/
 *.log
 *.dmp
+*.spv
+/dist/
 
