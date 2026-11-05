@@ -47,5 +47,13 @@ if ($BuildTests) {
         (Join-Path $PSScriptRoot 'tests/checkpoints.cpp') (Join-Path $PSScriptRoot 'src/log/Log.cpp') `
         -o (Join-Path $outDir 'checkpoints_test.exe')
     if ($LASTEXITCODE -ne 0) { throw "Checkpoint test compilation failed: $LASTEXITCODE" }
+    & $compiler -std=c++20 -static -DUNICODE -D_UNICODE -DNOMINMAX -D_MINGW_USE_SECAPI=1 `
+        -I (Join-Path $VulkanHeaders 'include') `
+        (Join-Path $PSScriptRoot 'tests/indirect_bounds.cpp') (Join-Path $PSScriptRoot 'src/log/Log.cpp') `
+        -o (Join-Path $outDir 'indirect_bounds_test.exe')
+    if ($LASTEXITCODE -ne 0) { throw "Indirect bounds test compilation failed: $LASTEXITCODE" }
+    & $compiler -std=c++20 -static -municode -I (Join-Path $VulkanHeaders 'include') `
+        (Join-Path $PSScriptRoot 'tests/indirect_gpu.cpp') -o (Join-Path $outDir 'indirect_gpu_test.exe')
+    if ($LASTEXITCODE -ne 0) { throw "Indirect GPU test compilation failed: $LASTEXITCODE" }
 }
 Get-FileHash (Join-Path $outDir 'vulkan-1.dll')

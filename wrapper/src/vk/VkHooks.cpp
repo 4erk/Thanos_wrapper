@@ -28,7 +28,7 @@
 #include <type_traits>
 using namespace thanosray::log;
 static const char* kVkHooksBuildId =
-"VkHooks.cpp BUILD_ID 4erk-doom-checkpoints-pacing-8";
+"VkHooks.cpp BUILD_ID 4erk-doom-indirect-bounds-9";
 // ---- Forward decls (must appear AFTER Vulkan types are visible) ----
 
 // ============================================================================

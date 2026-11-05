@@ -6,8 +6,9 @@ on GTX 1080 Ti / NVIDIA 582.28. The user confirmed normal operation on 2026-11-0
 A later gameplay session ended in a confirmed GPU device-loss hang after about
 30 minutes. A repeat failure after approximately two hours on 2026-11-05
 reported an invalid GPU memory write. The robustness candidate below failed to
-prevent a repeat after 13 minutes. Sustained stability, FSR and other GPUs remain
-unverified; checkpoints and frame pacing support further investigation.
+prevent a repeat after 13 minutes. Checkpoints and 30 FPS pacing subsequently
+recorded another invalid-write fault after almost four hours. Sustained stability,
+FSR and other GPUs remain unverified; indirect-buffer checks are experimental.
 
 Build on Windows with PowerShell, llvm-mingw x86_64 and Vulkan-Headers:
 
@@ -104,6 +105,38 @@ lifetime cleanup and pacing. It does not cause a real GPU fault. The real GPU
 test above can also run with GpuCheckpoints=1; it exercises checkpoint insertion
 while reading back a compute result, without querying a healthy device's fault
 checkpoints. See docs/TECHNICAL.md for coverage and limitations.
+
+Indirect-count bounds guard (off by default):
+
+Add IndirectBounds=1 under [experiments]. Buffer sizes are tracked when this guard
+or GpuCheckpoints is requested. The guard caps maximum count to known buffer
+capacity and skips known invalid offset/count ranges or stride. Unknown handles
+are forwarded unchanged. It does not validate GPU-written counts or index data,
+synchronization, descriptors or physical buffer addresses. First 32 adjustments
+are logged; checkpoint fault records include the original and forwarded values.
+No invalid game draw arguments have yet been established from the captured fault.
+
+  .\build\indirect_bounds_test.exe
+
+Run with IndirectBounds=1 and again with IndirectBounds=0, keeping GpuCheckpoints=1
+to verify tracking without mutation. The test covers unsigned overflow, sizes,
+alignment/stride, unknown resources, argument forwarding and handle lifetime.
+
+Compile and validate the original rendering test shaders:
+
+  glslangValidator -V --target-env vulkan1.2 tests\indirect.vert -o build\indirect.vert.spv
+  glslangValidator -V --target-env vulkan1.2 tests\indirect.frag -o build\indirect.frag.spv
+  spirv-val --target-env vulkan1.2 build\indirect.vert.spv
+  spirv-val --target-env vulkan1.2 build\indirect.frag.spv
+  .\build\indirect_gpu_test.exe "$PWD\build\vulkan-1.dll" "$PWD\build\indirect.vert.spv" "$PWD\build\indirect.frag.spv"
+  .\build\indirect_gpu_test.exe "$PWD\build\vulkan-1.dll" "$PWD\build\indirect.vert.spv" "$PWD\build\indirect.frag.spv" gipa
+
+This test requires the current wrapper with IndirectBounds=1, its sibling native
+loader, Vulkan 1.3 dynamic rendering and indirect-count support. A 20-byte argument
+buffer holds one indexed command; the wrapper must reduce maximum count 2 to 1.
+The GPU draws a triangle into a 4x4 image, waits at most five seconds and checks
+all 16 pixels. Test both with checkpoints enabled and disabled. Passing this
+small rendering test does not establish a fix for the observed gameplay fault.
 
 Changes in this branch:
 - Preserve wrapper resolvers and extension enumeration when obtained through GIPA.

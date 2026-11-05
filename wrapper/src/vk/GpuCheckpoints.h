@@ -1,5 +1,6 @@
 #pragma once
 #include "ShaderDiagnostics.h"
+#include "IndirectBounds.h"
 #include <array>
 #include <unordered_map>
 #include <vector>
@@ -30,6 +31,8 @@ struct Marker {
     VkPipeline pipeline{};
     const char* operation{};
     bool after{};
+    bool hasDraw{};
+    indirect::Draw draw{};
 };
 inline std::mutex mutex;
 inline std::unordered_map<VkDevice, Device> devices;
@@ -41,6 +44,7 @@ inline uint64_t serial{};
 
 inline void OnDevice(VkDevice device, PFN_vkGetDeviceProcAddr resolve, const VkDeviceCreateInfo& info, bool enabled)
 {
+    if (indirect::Track()) log::Logf("[INDIRECT-BOUNDS] device=%p guard=%d buffer-tracking=1",(void*)device,indirect::Enabled());
     if (!enabled) return;
     Device entry;
     entry.set = reinterpret_cast<PFN_vkCmdSetCheckpointNV>(resolve(device, "vkCmdSetCheckpointNV"));
@@ -74,7 +78,8 @@ inline VkDevice QueueDevice(VkQueue queue)
 }
 inline void ForgetDevice(VkDevice device)
 {
-    if (!Requested()) return;
+    indirect::ForgetDevice(device);
+    if (!indirect::Track()) return;
     std::lock_guard lock(mutex);
     std::erase_if(queues, [=](const auto& x){ return x.second==device; });
     std::erase_if(commands, [=](const auto& x){ return x.second.device==device; });
@@ -89,7 +94,7 @@ inline void Bind(VkCommandBuffer cb, VkPipelineBindPoint point, VkPipeline pipel
     if(point==VK_PIPELINE_BIND_POINT_GRAPHICS) it->second.graphics=pipeline;
     if(point==VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR) it->second.rays=pipeline;
 }
-inline void Mark(VkCommandBuffer cb, const char* operation, VkPipelineBindPoint point, bool after)
+inline void Mark(VkCommandBuffer cb, const char* operation, VkPipelineBindPoint point, bool after, const indirect::Draw* draw=nullptr)
 {
     if (!Requested()) return;
     PFN_vkCmdSetCheckpointNV set{};
@@ -103,7 +108,7 @@ inline void Mark(VkCommandBuffer cb, const char* operation, VkPipelineBindPoint 
             point==VK_PIPELINE_BIND_POINT_GRAPHICS ? c.graphics :
             point==VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR ? c.rays : VK_NULL_HANDLE;
         id=++serial;
-        markers[id%capacity]={id,cb,pipeline,operation,after};
+        markers[id%capacity]={id,cb,pipeline,operation,after,draw!=nullptr,draw?*draw:indirect::Draw{}};
     }
     // Vulkan treats this integer token as opaque; no application pointer is
     // dereferenced by the driver. Old ring entries are explicitly marked expired.
@@ -141,10 +146,17 @@ inline void Report(VkDevice device)
             const auto id=static_cast<uint64_t>(reinterpret_cast<uintptr_t>(data[i].pCheckpointMarker));
             Marker marker;
             { std::lock_guard lock(mutex); marker=markers[id%capacity]; }
-            if(id && marker.id==id)
+            if(id && marker.id==id) {
                 log::Logf("[CHECKPOINT-FAULT] queue=%p stage=0x%x id=%llu cb=%p pipeline=%p %s %s",
                     (void*)queue,data[i].stage,id,(void*)marker.command,(void*)marker.pipeline,
                     marker.after?"after":"before",marker.operation);
+                if(marker.hasDraw) {
+                    const auto& d=marker.draw;
+                    log::Logf("[CHECKPOINT-DRAW] id=%llu indexed=%d args=%p offset=%llu bytes=%llu known=%d count=%p offset=%llu bytes=%llu known=%d requested=%u forwarded=%u stride=%u skipped=%d",
+                        id,d.indexed,(void*)d.buffer,d.offset,d.bufferSize,d.bufferKnown,(void*)d.countBuffer,d.countOffset,d.countSize,d.countKnown,
+                        d.requested,d.forwarded,d.stride,d.skipped);
+                }
+            }
             else log::Logf("[CHECKPOINT-FAULT] queue=%p stage=0x%x id=%llu metadata=expired-or-external",
                 (void*)queue,data[i].stage,id);
         }
@@ -164,22 +176,22 @@ inline void VKAPI_CALL BindCommand(VkCommandBuffer cb,VkPipelineBindPoint point,
 inline VkResult VKAPI_CALL Allocate(VkDevice device,const VkCommandBufferAllocateInfo* info,VkCommandBuffer* output)
 {
     auto result=realAllocate(device,info,output);
-    if(result==VK_SUCCESS && Requested()) {
+    if(result==VK_SUCCESS && indirect::Track()) {
         std::lock_guard lock(mutex); auto it=devices.find(device);
-        if(it!=devices.end()) for(uint32_t i=0;i<info->commandBufferCount;++i)
-            commands[output[i]]={device,info->commandPool,it->second.set};
+        for(uint32_t i=0;i<info->commandBufferCount;++i)
+            commands[output[i]]={device,info->commandPool,it==devices.end()?nullptr:it->second.set};
     }
     return result;
 }
 inline void VKAPI_CALL Free(VkDevice device,VkCommandPool pool,uint32_t count,const VkCommandBuffer* buffers)
 {
-    if(Requested()) { std::lock_guard lock(mutex); for(uint32_t i=0;i<count;++i) commands.erase(buffers[i]); }
+    if(indirect::Track()) { std::lock_guard lock(mutex); for(uint32_t i=0;i<count;++i) commands.erase(buffers[i]); }
     realFree(device,pool,count,buffers);
 }
 inline VkResult VKAPI_CALL Begin(VkCommandBuffer cb,const VkCommandBufferBeginInfo* info)
 {
     auto result=realBegin(cb,info);
-    if(result==VK_SUCCESS && Requested()) {
+    if(result==VK_SUCCESS && indirect::Track()) {
         std::lock_guard lock(mutex); auto it=commands.find(cb);
         if(it!=commands.end()) it->second.graphics=it->second.compute=it->second.rays=VK_NULL_HANDLE;
     }
@@ -187,7 +199,7 @@ inline VkResult VKAPI_CALL Begin(VkCommandBuffer cb,const VkCommandBufferBeginIn
 }
 inline void VKAPI_CALL DestroyPool(VkDevice device,VkCommandPool pool,const VkAllocationCallbacks* allocator)
 {
-    if(Requested()) { std::lock_guard lock(mutex); std::erase_if(commands,[=](const auto& x){return x.second.device==device && x.second.pool==pool;}); }
+    if(indirect::Track()) { std::lock_guard lock(mutex); std::erase_if(commands,[=](const auto& x){return x.second.device==device && x.second.pool==pool;}); }
     realDestroyPool(device,pool,allocator);
 }
 
@@ -203,9 +215,23 @@ CHECKPOINT_COMMAND(vkCmdDraw,VK_PIPELINE_BIND_POINT_GRAPHICS,(VkCommandBuffer cb
 CHECKPOINT_COMMAND(vkCmdDrawIndexed,VK_PIPELINE_BIND_POINT_GRAPHICS,(VkCommandBuffer cb,uint32_t v,uint32_t i,uint32_t f,int32_t o,uint32_t n),v,i,f,o,n)
 CHECKPOINT_COMMAND(vkCmdDrawIndirect,VK_PIPELINE_BIND_POINT_GRAPHICS,(VkCommandBuffer cb,VkBuffer b,VkDeviceSize o,uint32_t n,uint32_t s),b,o,n,s)
 CHECKPOINT_COMMAND(vkCmdDrawIndexedIndirect,VK_PIPELINE_BIND_POINT_GRAPHICS,(VkCommandBuffer cb,VkBuffer b,VkDeviceSize o,uint32_t n,uint32_t s),b,o,n,s)
-CHECKPOINT_COMMAND(vkCmdDrawIndirectCount,VK_PIPELINE_BIND_POINT_GRAPHICS,(VkCommandBuffer cb,VkBuffer b,VkDeviceSize o,VkBuffer c,VkDeviceSize co,uint32_t n,uint32_t s),b,o,c,co,n,s)
-CHECKPOINT_COMMAND(vkCmdDrawIndexedIndirectCount,VK_PIPELINE_BIND_POINT_GRAPHICS,(VkCommandBuffer cb,VkBuffer b,VkDeviceSize o,VkBuffer c,VkDeviceSize co,uint32_t n,uint32_t s),b,o,c,co,n,s)
 #undef CHECKPOINT_COMMAND
+inline PFN_vkCmdDrawIndirectCount real_vkCmdDrawIndirectCount{};
+inline PFN_vkCmdDrawIndexedIndirectCount real_vkCmdDrawIndexedIndirectCount{};
+template<class F> inline void DrawCount(const char* name,F real,VkCommandBuffer cb,VkBuffer b,VkDeviceSize offset,
+    VkBuffer count,VkDeviceSize countOffset,uint32_t maximum,uint32_t stride,bool indexed)
+{
+    VkDevice device{};
+    if(indirect::Track()) {std::lock_guard lock(mutex); auto it=commands.find(cb); if(it!=commands.end()) device=it->second.device;}
+    const auto draw=indirect::Inspect(device,b,offset,count,countOffset,maximum,stride,indexed);
+    Mark(cb,name,VK_PIPELINE_BIND_POINT_GRAPHICS,false,&draw);
+    if(!draw.skipped) real(cb,b,offset,count,countOffset,draw.forwarded,stride);
+    Mark(cb,name,VK_PIPELINE_BIND_POINT_GRAPHICS,true,&draw);
+}
+inline void VKAPI_CALL hook_vkCmdDrawIndirectCount(VkCommandBuffer cb,VkBuffer b,VkDeviceSize o,VkBuffer c,VkDeviceSize co,uint32_t n,uint32_t s)
+{DrawCount("vkCmdDrawIndirectCount",real_vkCmdDrawIndirectCount,cb,b,o,c,co,n,s,false);}
+inline void VKAPI_CALL hook_vkCmdDrawIndexedIndirectCount(VkCommandBuffer cb,VkBuffer b,VkDeviceSize o,VkBuffer c,VkDeviceSize co,uint32_t n,uint32_t s)
+{DrawCount("vkCmdDrawIndexedIndirectCount",real_vkCmdDrawIndexedIndirectCount,cb,b,o,c,co,n,s,true);}
 inline PFN_vkVoidFunction Wrap(const char* name,PFN_vkVoidFunction real)
 {
     if(!name || !real) return real;
@@ -224,6 +250,6 @@ inline PFN_vkVoidFunction Wrap(const char* name,PFN_vkVoidFunction real)
     WRAP(vkCmdDrawIndirectCountKHR,hook_vkCmdDrawIndirectCount,real_vkCmdDrawIndirectCount)
     WRAP(vkCmdDrawIndexedIndirectCountKHR,hook_vkCmdDrawIndexedIndirectCount,real_vkCmdDrawIndexedIndirectCount)
 #undef WRAP
-    return real;
+    return indirect::Wrap(name,real);
 }
 }

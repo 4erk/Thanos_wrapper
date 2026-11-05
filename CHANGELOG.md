@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Record another gameplay device loss after 3 hours 59 minutes with robustness, checkpoints and 30 FPS pacing enabled. Native reporting identified an invalid write in `0x38000–0x38fff`; checkpoint progress points to an indexed indirect-draw region, without identifying the exact offending instruction.
+- Track buffer sizes and include indirect-count draw arguments in bounded checkpoint records. Add opt-in `IndirectBounds=1` to cap maximum draw count to known argument-buffer capacity and skip known invalid ranges/stride, with bounded logging. Unknown buffers pass through; actual GPU-generated counts, indices and buffer-device-address accesses are not inspected. This is an unproven mitigation for the game fault.
+- Add boundary/overflow/lifetime and forwarding tests plus an original offscreen indexed indirect GPU rendering test. Verify rendered pixels through both GIPA and GDPA, including operation without checkpoints enabled.
 - Record failure of the robustness candidate: another `WRITE_INVALID` fault in address interval 0–4095 after 13 minutes, with guards enabled. Pre-fault samples show 83–84 °C, 99% GPU utilization and approximately 1.1 GiB free adapter memory; these values alone do not identify the cause.
 - Add opt-in native NVIDIA GPU checkpoints around draw, dispatch and selected RT/AS commands, bounded marker history and once-per-device reporting after real device loss. Log pipeline-to-shader-module mappings for correlation.
 - Add opt-in `FrameLimit=30` host pacing before presentation, including the separate GDPA presentation path. Preserve native presentation results and GPU command ordering. This is a load-reduction experiment, not a confirmed stability fix.

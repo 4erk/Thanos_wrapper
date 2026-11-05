@@ -2,7 +2,7 @@
 
 Экспериментальная Vulkan-обёртка для **DOOM: The Dark Ages на NVIDIA GTX 1080 Ti**. Форк [jase212007/Thanos_wrapper](https://github.com/jase212007/Thanos_wrapper).
 
-**Подтверждены запуск, меню и 3D-сцена на GTX 1080 Ti; сохраняются зависания во время игры.** Драйвер дважды сообщил о недопустимой записи в память GPU. Защита памяти не предотвратила повторение: последний сбой произошёл через 13 минут после запуска. Ветка разработки добавляет метки выполнения GPU и необязательный лимит FPS для дальнейшей проверки. Совместимость со всей серией GTX 10xx не заявляется.
+**Подтверждены запуск, меню и 3D-сцена на GTX 1080 Ti; сохраняются зависания во время игры.** Драйвер повторно сообщил о недопустимой записи в память GPU. Защита памяти и лимит 30 FPS не устранили сбой: последний сеанс завершился зависанием почти через четыре часа. Метки выполнения сузили поиск до участка с косвенной отрисовкой; точная причина не установлена. Ветка разработки добавляет проверку границ её буферов и подробные параметры в отчёт. Совместимость со всей серией GTX 10xx не заявляется.
 
 [Скачать v0.1.0-pascal.1](https://github.com/4erk/Thanos_wrapper/releases/tag/v0.1.0-pascal.1) · [Установка и откат](docs/INSTALL.ru.md) · [English installation](docs/INSTALL.en.md) · [Изменения](CHANGELOG.md) · [Технические детали](docs/TECHNICAL.md)
 
@@ -40,6 +40,7 @@
 - При потере GPU игра бесконечно опрашивает результаты запросов. Ветка разработки добавляет задержку только после `VK_ERROR_DEVICE_LOST`, чтобы этот цикл не занимал ядро CPU, сохраняя настоящий код ошибки. Это не восстановление GPU.
 - Параметр `RobustAccess=1` включает поддерживаемые драйвером проверки доступа к памяти. Отдельный GPU-тест прошёл, но зависание игры повторилось с той же ошибкой записи. Защита не охватывает все виды обращений к памяти; виновный игровой шейдер или команда пока не определены. Этот эксперимент отсутствует в `v0.1.0-pascal.1`.
 - Ветка разработки поддерживает `GpuCheckpoints=1` совместно с `RuntimeTrace=1` для локализации выполнявшихся команд и `FrameLimit=30` для снижения частоты кадров внутри обёртки. Это диагностический режим; устранение зависаний им пока не подтверждено.
+- Новый эксперимент `IndirectBounds=1` проверяет известные размеры буферов косвенной отрисовки и ограничивает число команд; некорректные диапазоны пропускаются с записью в журнал. Проверка прошла отдельный GPU-тест, но неверные параметры у самой игры и устранение её зависаний пока не подтверждены. Параметр по умолчанию выключен и отсутствует в опубликованном релизе.
 - Чёрный экран наблюдался после включения FSR вместе с дополнительной динамической настройкой графики. Отдельные переключатели ещё не изолированы; исправление FSR не заявляется.
 - Режим `PascalRTGate` объявляет имя `VK_NV_mesh_shader`, сохраняя реальные биты mesh-функций. Mesh-шейдеры не эмулируются.
 - Драйвер GTX 1080 Ti сообщает отсутствие `shaderFloat16` и `rayQuery`. Полноценного преобразования этих шейдеров здесь нет. Отдельные сцены или настройки могут не работать.
@@ -55,4 +56,4 @@
 
 Основа — работа [jase212007](https://github.com/jase212007/Thanos_wrapper). [Оригинальный README](docs/UPSTREAM_README.md) сохранён отдельно. Это не официальное исправление id Software, Bethesda, NVIDIA или AMD.
 
-**English:** Experimental DOOM: The Dark Ages compatibility fork for GTX 1080 Ti. Startup, menus and a 3D scene confirmed on NVIDIA 582.28, followed by device-loss hangs. Native memory robustness did not prevent a repeat invalid-write fault. The development branch adds opt-in GPU checkpoints and frame pacing for further investigation; stability remains unresolved. FSR and other GPUs remain unverified. See the [English guide](docs/INSTALL.en.md).
+**English:** Experimental DOOM: The Dark Ages compatibility fork for GTX 1080 Ti. Startup, menus and a 3D scene confirmed on NVIDIA 582.28, followed by device-loss hangs. Memory robustness and 30 FPS pacing did not prevent a repeat invalid-write fault after nearly four hours. Checkpoints narrowed the investigation to an indirect-draw region. The development branch adds an opt-in indirect-buffer bounds guard and richer fault records; the cause and sustained stability remain unresolved. FSR and other GPUs remain unverified. See the [English guide](docs/INSTALL.en.md).

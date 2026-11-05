@@ -101,6 +101,29 @@ Marker metadata is bounded to 65,536 entries. Old entries from long-lived reusab
 
 Synthetic tests cover marker order, argument forwarding, pipeline identity, bounded reporting/history, command/device lifetime and frame-pacing deadlines/results. A real GPU compute test passed with checkpoints enabled. These tests establish instrumentation behavior, not successful execution of the failing game scene or sustained stability.
 
+## Checkpoint capture and indirect-count experiment, November 5
+
+The next process started at 05:19:28 and lost its Vulkan device at 09:18:44, approximately 3 hours 59 minutes later. Robustness, NVIDIA checkpoints and the 30 FPS cap were active. The first error was `VK_ERROR_DEVICE_LOST` from `vkQueueSubmit`. Native fault reporting returned `WRITE_INVALID` at `0x38000`, precision 4096 (the interval `0x38000–0x38fff`), plus eight unknown instruction-pointer entries. The CPU dump again showed query polling in the wrapper's backoff. The fault therefore persisted despite these experiments and did not repeat at a fixed interval.
+
+On one queue, both returned checkpoint stages identified a marker before `vkCmdDrawIndexedIndirectCount`, with a graphics pipeline that can be correlated to its vertex and fragment modules. A second queue reported progress after `vkCmdBuildAccelerationStructuresKHR`. Asynchronous progress markers do not prove that the immediately following command or either shader caused the invalid write. Static inspection of the two graphics modules found physical-buffer-address reads but no explicit storage-buffer/image writes or atomics; neither module declares Float16 or RayQuery capabilities. This does not exclude invalid input, driver-generated operations, other work or synchronization faults. The captured game binaries remain private.
+
+The three-hour telemetry capture ended at 08:19:30, about an hour before device loss. Its last samples were 71–72 °C with approximately 10,090 MiB used and 1,018 MiB free adapter memory. These are not measurements at the fault. The next local single-session capture is bounded to twelve hours and stops when the launched process exits.
+
+The wrapper now tracks `vkCreateBuffer` sizes and device/handle lifetime when checkpoints or the new guard are requested. Indirect-count checkpoint records retain handles, offsets, known sizes, stride, requested/forwarded maximum draw count and whether a call was skipped. This makes a repeat fault more informative without copying GPU buffer contents.
+
+```ini
+[experiments]
+IndirectBounds=1
+```
+
+The option defaults to off. For a known argument buffer, it limits `maxDrawCount` using overflow-safe buffer capacity arithmetic. Known invalid argument/count offsets, insufficient count storage, invalid stride and missing command capacity are skipped, with the first 32 adjustments logged. Both indexed and non-indexed count commands and their KHR aliases are covered. Unknown buffers pass through; checkpoint recording alone does not change arguments. Metadata is removed on buffer/device destruction. Core buffer creation, command allocation and draws are intercepted through both GIPA and GDPA.
+
+No captured evidence yet establishes that DOOM supplied invalid indirect parameters. This is a narrow mitigation candidate and diagnostic addition, not a confirmed correction of the gameplay fault. It does not inspect GPU-generated command contents, vertex/index ranges, synchronization, physical addresses or resource lifetimes during GPU execution. It cannot repair the already lost device. Skipping a malformed command may omit geometry.
+
+Tests cover overflow/boundaries, alignment/stride, known and unknown resources, forwarding with the guard off, and destruction/handle reuse. An original offscreen GPU test supplied one indexed command in a 20-byte buffer with maximum count 2; the guard forwarded 1, and all sixteen pixels matched the expected rendered color. GIPA and GDPA runs passed, including the guard without checkpoints enabled. The test shaders pass SPIR-V validation. This verifies the new path, not hours of gameplay.
+
+The game restarted with the guard enabled, and the user confirmed the loaded 3D scene and working controls. Initial logs show successful frames and no guard adjustments or device loss. Extended gameplay testing is still in progress.
+
 ## Remaining work
 
 - Identify the GPU operation responsible for the confirmed device loss.
@@ -120,3 +143,4 @@ Synthetic tests cover marker order, argument forwarding, pipeline identity, boun
 - [Device-fault address types](https://docs.vulkan.org/refpages/latest/refpages/source/VkDeviceFaultAddressTypeKHR.html)
 - [NVIDIA device diagnostic checkpoints](https://docs.vulkan.org/refpages/latest/refpages/source/VK_NV_device_diagnostic_checkpoints.html)
 - [Checkpoint command restrictions](https://docs.vulkan.org/refpages/latest/refpages/source/vkCmdSetCheckpointNV.html)
+- [Indexed indirect-count buffer and stride requirements](https://docs.vulkan.org/refpages/latest/refpages/source/vkCmdDrawIndexedIndirectCount.html)
