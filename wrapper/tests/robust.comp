@@ -1,0 +1,12 @@
+#version 450
+layout(local_size_x=1) in;
+layout(set=0,binding=0,std430) buffer Output { uint data[]; } dst;
+layout(set=0,binding=1,std430) buffer NullBuffer { uint data[]; } emptyBuffer;
+void main() {
+    dst.data[0] = emptyBuffer.data[0];
+    emptyBuffer.data[0] = 123u;
+    // The descriptor range is 16 bytes, while its backing buffer is 4096.
+    // This must be discarded, preserving the host-side sentinel at byte 2048.
+    dst.data[512] = 123u;
+    dst.data[1] = 456u;
+}

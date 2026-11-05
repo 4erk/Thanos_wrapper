@@ -2,7 +2,7 @@
 
 Экспериментальная Vulkan-обёртка для **DOOM: The Dark Ages на NVIDIA GTX 1080 Ti**. Форк [jase212007/Thanos_wrapper](https://github.com/jase212007/Thanos_wrapper).
 
-**3 ноября 2026 года подтверждены запуск, меню и появление 3D-сцены на GTX 1080 Ti. При последующей игре произошло зависание после сбоя GPU примерно через 30 минут.** Причина потери GPU пока не установлена; длительная стабильность не подтверждена. Совместимость со всей серией GTX 10xx не заявляется.
+**Подтверждены запуск, меню и 3D-сцена на GTX 1080 Ti. Зафиксированы зависания примерно через 30 минут и 2 часа игры.** При повторном сбое 5 ноября 2026 года драйвер сообщил о недопустимой записи в память GPU. В ветке разработки добавлена экспериментальная защита памяти; устранение зависаний ещё не подтверждено. Совместимость со всей серией GTX 10xx не заявляется.
 
 [Скачать v0.1.0-pascal.1](https://github.com/4erk/Thanos_wrapper/releases/tag/v0.1.0-pascal.1) · [Установка и откат](docs/INSTALL.ru.md) · [English installation](docs/INSTALL.en.md) · [Изменения](CHANGELOG.md) · [Технические детали](docs/TECHNICAL.md)
 
@@ -37,7 +37,8 @@
 
 ## Ограничения
 
-- Зафиксирована потеря GPU с последующим бесконечным опросом результатов запросов. Исправление причины сбоя пока не найдено. Диагностическая сборка записывает ошибки и сведения драйвера; это не исправление стабильности.
+- При потере GPU игра бесконечно опрашивает результаты запросов. Ветка разработки добавляет задержку только после `VK_ERROR_DEVICE_LOST`, чтобы этот цикл не занимал ядро CPU, сохраняя настоящий код ошибки. Это не восстановление GPU.
+- Новый параметр `RobustAccess=1` включает поддерживаемые драйвером проверки доступа к памяти. Отдельный GPU-тест подтвердил обработку пустого дескриптора и отбрасывание записи за границей буфера. Защита не охватывает все виды обращений к памяти; виновный игровой шейдер или команда пока не определены. Этот эксперимент отсутствует в `v0.1.0-pascal.1`.
 - Чёрный экран наблюдался после включения FSR вместе с дополнительной динамической настройкой графики. Отдельные переключатели ещё не изолированы; исправление FSR не заявляется.
 - Режим `PascalRTGate` объявляет имя `VK_NV_mesh_shader`, сохраняя реальные биты mesh-функций. Mesh-шейдеры не эмулируются.
 - Драйвер GTX 1080 Ti сообщает отсутствие `shaderFloat16` и `rayQuery`. Полноценного преобразования этих шейдеров здесь нет. Отдельные сцены или настройки могут не работать.
@@ -53,4 +54,4 @@
 
 Основа — работа [jase212007](https://github.com/jase212007/Thanos_wrapper). [Оригинальный README](docs/UPSTREAM_README.md) сохранён отдельно. Это не официальное исправление id Software, Bethesda, NVIDIA или AMD.
 
-**English:** Experimental DOOM: The Dark Ages compatibility fork for GTX 1080 Ti. Startup, menus and a 3D scene confirmed on NVIDIA 582.28, followed by a device-loss hang during extended gameplay. The GPU failure remains unresolved. FSR and other GPUs remain unverified. See the [English guide](docs/INSTALL.en.md).
+**English:** Experimental DOOM: The Dark Ages compatibility fork for GTX 1080 Ti. Startup, menus and a 3D scene confirmed on NVIDIA 582.28, followed by device-loss hangs during extended gameplay. A repeat fault reported an invalid GPU memory write. An opt-in memory-robustness experiment is under test on the development branch; sustained stability remains unconfirmed. FSR and other GPUs remain unverified. See the [English guide](docs/INSTALL.en.md).

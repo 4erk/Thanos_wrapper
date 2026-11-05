@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Investigate a second hang on 2026-11-05: native device-fault reporting identifies an invalid GPU write in the address interval 0–4095, followed by device-loss query polling. The responsible shader/command is still unknown.
+- Add opt-in `[experiments] RobustAccess=1` to enable native buffer/image robustness and null descriptors when supported, with update-after-bind compatibility checks. This is a candidate mitigation; extended gameplay stability is not yet established.
+- Back off query polling by 10 ms after `VK_ERROR_DEVICE_LOST`, including with tracing disabled, to prevent the observed CPU busy loop. Preserve the real error; do not claim GPU recovery.
+- Test feature-chain handling and real GPU null-buffer reads/writes and out-of-range stores through both device-feature creation paths. Add native robustness capability reporting to the probe.
 - Record a confirmed extended-gameplay hang on GTX 1080 Ti / NVIDIA 582.28: device loss followed by repeated query-result polling. The cause of device loss is unresolved.
 - Add opt-in `RuntimeTrace=1` diagnostics for queue submissions, presentation, query polling, waits and allocation errors. Native arguments, output data and result codes are preserved.
 - Enable native `VK_EXT_device_fault` reporting when diagnostics are requested and the driver supports it. Capture bounded fault details once per device; do not fabricate successful results after device loss.

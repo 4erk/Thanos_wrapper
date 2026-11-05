@@ -4,14 +4,21 @@
 #include <unordered_map>
 #include <algorithm>
 
-// Observe native results without changing return values, query data, waits or
-// queue ordering. In particular, never fabricate success after DEVICE_LOST.
+// Preserve native results, query data and queue ordering. Only failed query
+// polls after DEVICE_LOST get a CPU backoff; never fabricate successful results.
 namespace thanosray::vk::runtime {
 inline bool Enabled()
 {
     static const bool enabled = GetPrivateProfileIntW(L"diagnostics", L"RuntimeTrace", 0,
         diagnostics::ConfigPath().c_str()) != 0;
     return enabled;
+}
+
+inline void BackoffAfterDeviceLoss(VkResult result)
+{
+    // A lost device cannot produce successful query results again. Some games
+    // nevertheless poll it forever. Keep the real error, but yield the CPU.
+    if (result == VK_ERROR_DEVICE_LOST) Sleep(10);
 }
 
 inline std::atomic<uint64_t> submits{0}, presents{0}, queries{0};
@@ -162,7 +169,11 @@ inline VkResult VKAPI_CALL AllocateMemory(VkDevice d, const VkMemoryAllocateInfo
 inline VkResult VKAPI_CALL GetQueryPoolResults(VkDevice d, VkQueryPool pool, uint32_t first,
     uint32_t count, size_t size, void* data, VkDeviceSize stride, VkQueryResultFlags flags)
 {
-    if (!Enabled()) return realQueryResults(d, pool, first, count, size, data, stride, flags);
+    if (!Enabled()) {
+        const auto result = realQueryResults(d, pool, first, count, size, data, stride, flags);
+        BackoffAfterDeviceLoss(result);
+        return result;
+    }
     queries.fetch_add(1, std::memory_order_relaxed);
     const auto started = GetTickCount64();
     const auto result = realQueryResults(d, pool, first, count, size, data, stride, flags);
@@ -184,6 +195,7 @@ inline VkResult VKAPI_CALL GetQueryPoolResults(VkDevice d, VkQueryPool pool, uin
     }
     Observe("vkGetQueryPoolResults", result, started);
     if (result == VK_ERROR_DEVICE_LOST) ReportFault(d);
+    BackoffAfterDeviceLoss(result);
     return result;
 }
 

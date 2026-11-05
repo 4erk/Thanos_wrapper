@@ -40,8 +40,15 @@ int wmain(int argc, wchar_t** argv) {
         VkPhysicalDeviceAccelerationStructureFeaturesKHR as{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR};
         VkPhysicalDeviceRayTracingPipelineFeaturesKHR rt{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR};
         VkPhysicalDeviceRayQueryFeaturesKHR rq{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR};
+        VkPhysicalDeviceRobustness2FeaturesEXT robust{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT};
+        rq.pNext=&robust;
         f.pNext=&v12;v12.pNext=&v13;v13.pNext=&as;as.pNext=&rt;rt.pNext=&rq;features(p,&f);
         printf("Float16=%u BDA=%u sync2=%u rendering=%u AS=%u RTpipeline=%u rayQuery=%u\n",v12.shaderFloat16,v12.bufferDeviceAddress,v13.synchronization2,v13.dynamicRendering,as.accelerationStructure,rt.rayTracingPipeline,rq.rayQuery);
+        VkPhysicalDeviceVulkan12Properties props12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES};
+        VkPhysicalDeviceProperties2 props2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2}; props2.pNext=&props12;
+        ((PFN_vkGetPhysicalDeviceProperties2)gip(instance,"vkGetPhysicalDeviceProperties2"))(p,&props2);
+        printf("Robustness: buffer=%u buffer2=%u image2=%u nullDescriptor=%u updateAfterBind=%u\n",
+            f.features.robustBufferAccess,robust.robustBufferAccess2,robust.robustImageAccess2,robust.nullDescriptor,props12.robustBufferAccessUpdateAfterBind);
         uint32_t n=0;exts(p,nullptr,&n,nullptr);std::vector<VkExtensionProperties> ep(n);exts(p,nullptr,&n,ep.data());
         ep.resize(n);
         if (wrapper) {

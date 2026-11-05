@@ -4,7 +4,9 @@ Source was extracted from upstream Thanos-Wrapper source.zip.
 The current build reaches menus and displays a 3D scene in DOOM: The Dark Ages
 on GTX 1080 Ti / NVIDIA 582.28. The user confirmed normal operation on 2026-11-03.
 A later gameplay session ended in a confirmed GPU device-loss hang after about
-30 minutes. The GPU fault remains unresolved; FSR and other GPUs are unverified.
+30 minutes. A repeat failure after approximately two hours on 2026-11-05
+reported an invalid GPU memory write. The robustness candidate below is under
+gameplay testing; sustained stability, FSR and other GPUs remain unverified.
 
 Build on Windows with PowerShell, llvm-mingw x86_64 and Vulkan-Headers:
 
@@ -42,11 +44,38 @@ Runtime diagnostics regression test:
 Run once with RuntimeTrace=0 (or no INI) and once with RuntimeTrace=1 in
 build\Thanos-wrapper.ini. It uses synthetic API functions, verifies unchanged
 query arguments, output data and native error results, and tests bounded fault
-capture with device-handle reuse. It does not force a real GPU fault.
+capture with device-handle reuse and CPU backoff after device loss. It does not
+force a real GPU fault.
 
 RuntimeTrace=1 in the [diagnostics] section enables runtime error/heartbeat logs
 and native VK_EXT_device_fault reporting when supported. It does not recover
 a lost device, change query results or automatically terminate the application.
+Query polling yields for 10 ms only after a native VK_ERROR_DEVICE_LOST result,
+regardless of RuntimeTrace. Normal VK_NOT_READY polling is unchanged.
+
+Memory robustness candidate (off by default):
+
+Add RobustAccess=1 under [experiments] in build\Thanos-wrapper.ini. Only
+driver-supported guards are enabled; [ROBUST] logs the selected feature bits.
+The game-tested preset also enables PascalRTGate=1 and RuntimeTrace=1.
+This candidate is not included in the v0.1.0-pascal.1 release archive.
+
+With -BuildTests, the build also produces robust_access_test.exe (feature-chain
+policy tests) and robust_gpu_test.exe (real compute dispatch through the wrapper).
+Compile the original test shader with glslangValidator and validate its SPIR-V:
+
+  glslangValidator -V --target-env vulkan1.2 tests\robust.comp -o build\robust.spv
+  spirv-val --target-env vulkan1.2 build\robust.spv
+  .\build\robust_access_test.exe
+  .\build\robust_gpu_test.exe "$PWD\build\vulkan-1.dll" "$PWD\build\robust.spv"
+  .\build\robust_gpu_test.exe "$PWD\build\vulkan-1.dll" "$PWD\build\robust.spv" features2
+
+The GPU test requires the current wrapper, a sibling vulkan-1_real.dll,
+RobustAccess=1 and native nullDescriptor/robustBufferAccess2 support. Exit 77
+means skipped. It verifies null reads return zero, null and out-of-range stores
+are discarded, a valid write completes and other buffer data is preserved.
+It does not exercise the game shaders, image robustness or buffer-device-address
+accesses, nor establish sustained gameplay stability.
 
 Changes in this branch:
 - Preserve wrapper resolvers and extension enumeration when obtained through GIPA.

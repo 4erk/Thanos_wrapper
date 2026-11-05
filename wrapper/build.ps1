@@ -36,5 +36,11 @@ if ($BuildTests) {
         (Join-Path $PSScriptRoot 'tests/runtime_diagnostics.cpp') (Join-Path $PSScriptRoot 'src/log/Log.cpp') `
         -o (Join-Path $outDir 'runtime_diagnostics_test.exe')
     if ($LASTEXITCODE -ne 0) { throw "Runtime test compilation failed: $LASTEXITCODE" }
+    & $compiler -std=c++20 -static -I (Join-Path $VulkanHeaders 'include') `
+        (Join-Path $PSScriptRoot 'tests/robust_access.cpp') -o (Join-Path $outDir 'robust_access_test.exe')
+    if ($LASTEXITCODE -ne 0) { throw "Robustness test compilation failed: $LASTEXITCODE" }
+    & $compiler -std=c++20 -static -municode -I (Join-Path $VulkanHeaders 'include') `
+        (Join-Path $PSScriptRoot 'tests/robust_gpu.cpp') -o (Join-Path $outDir 'robust_gpu_test.exe')
+    if ($LASTEXITCODE -ne 0) { throw "Robustness GPU test compilation failed: $LASTEXITCODE" }
 }
 Get-FileHash (Join-Path $outDir 'vulkan-1.dll')

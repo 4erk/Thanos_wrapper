@@ -54,6 +54,10 @@ int main()
     nextResult = VK_ERROR_DEVICE_LOST;
     CHECK(wrapped(device, pool, 3, 4, sizeof(output), output, 8, VK_QUERY_RESULT_64_BIT) == nextResult);
     CHECK(faultCalls == (Enabled() ? 4 : 0));
+    const auto started = GetTickCount64();
+    for (int i=0;i<6;++i)
+        CHECK(wrapped(device,pool,3,4,sizeof(output),output,8,VK_QUERY_RESULT_64_BIT)==VK_ERROR_DEVICE_LOST);
+    CHECK(GetTickCount64()-started >= 50);
     DestroyDevice(device, nullptr);
     std::printf("PASS: query arguments/data/results preserved; bounded once-per-device fault capture; RuntimeTrace=%d\n", Enabled());
 }

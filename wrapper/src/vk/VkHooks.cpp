@@ -5,6 +5,7 @@
 #include "RtFallback.h"
 #include "ShaderDiagnostics.h"
 #include "RuntimeDiagnostics.h"
+#include "RobustAccess.h"
 
 
 #include "../log/Log.h"
@@ -27,7 +28,7 @@
 #include <type_traits>
 using namespace thanosray::log;
 static const char* kVkHooksBuildId =
-"VkHooks.cpp BUILD_ID 4erk-doom-runtime-diag-5";
+"VkHooks.cpp BUILD_ID 4erk-doom-robust-access-6";
 // ---- Forward decls (must appear AFTER Vulkan types are visible) ----
 
 // ============================================================================
@@ -2062,6 +2063,24 @@ if (std::strcmp(pName, "vkCmdClearColorImage") == 0) {
             patched.enabledExtensionCount = (uint32_t)driverExts.size();
             patched.ppEnabledExtensionNames = driverExts.empty() ? nullptr : driverExts.data();
             patched.pNext = sanitizedPNext;
+
+            robustness::Storage robustStorage;
+            if (GetPrivateProfileIntW(L"experiments", L"RobustAccess", 0, diagnostics::ConfigPath().c_str())) {
+                const auto supported = QueryRealFeatures(physicalDevice);
+                VkPhysicalDeviceVulkan12Properties properties12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES};
+                VkPhysicalDeviceProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+                properties.pNext = &properties12;
+                if (st.real_vkGetPhysicalDeviceProperties2)
+                    st.real_vkGetPhysicalDeviceProperties2(physicalDevice, &properties);
+                const auto enabled = robustness::Apply(patched, robustStorage, supported.core.features, supported.rob2,
+                    driverSupported.count(VK_EXT_ROBUSTNESS_2_EXTENSION_NAME) != 0, properties12.robustBufferAccessUpdateAfterBind);
+                if (enabled.needsExtension) addExtension(VK_EXT_ROBUSTNESS_2_EXTENSION_NAME);
+                // addExtension can reallocate the vector: refresh the pointer.
+                patched.enabledExtensionCount = (uint32_t)driverExts.size();
+                patched.ppEnabledExtensionNames = driverExts.empty() ? nullptr : driverExts.data();
+                thanosray::log::Logf("[ROBUST] buffer=%u buffer2=%u image2=%u nullDescriptor=%u updateAfterBind=%u",
+                    enabled.buffer, enabled.buffer2, enabled.image2, enabled.nullDescriptor, properties12.robustBufferAccessUpdateAfterBind);
+            }
 
             thanosray::log::Logf("[vkCreateDevice] calling real vkCreateDevice...");
             VkResult r = st.real_vkCreateDevice(physicalDevice, &patched, pAllocator, pDevice);
