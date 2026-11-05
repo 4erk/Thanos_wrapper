@@ -73,9 +73,33 @@ ShaderDumpDirectory=
 
 On the tested GTX 1080 Ti, a standalone compute test passed with both `pEnabledFeatures` and `VkPhysicalDeviceFeatures2` device-creation paths: a null-buffer read returned zero, null-buffer writes and an out-of-range buffer write were discarded, a valid write completed and sentinel data was preserved. The test uses original test shader source, not captured game shaders. Basic queue/fence/timestamp forwarding and feature-chain tests also passed. The restarted game logged all four robustness features enabled and resumed successful presentations.
 
-This targets descriptor-based accesses covered by Vulkan robustness guarantees. It does not make arbitrary buffer-device-address pointers, dangling or uninitialized descriptors safe, and does not implement unsupported Float16/RayQuery shader features. A successful small compute test does not establish that the offending game operation is covered. Sustained gameplay validation is still required.
+This targets descriptor-based accesses covered by Vulkan robustness guarantees. It does not make arbitrary buffer-device-address pointers, dangling or uninitialized descriptors safe, and does not implement unsupported Float16/RayQuery shader features. A successful small compute test does not establish that the offending game operation is covered. The subsequent run described below showed that this mitigation was insufficient.
 
 Separately, query polling now yields the CPU for 10 ms only after the native function returns `VK_ERROR_DEVICE_LOST`, with tracing either on or off. Native return codes and output data are preserved; `VK_NOT_READY` polling is unchanged. This addresses the post-failure CPU busy loop, not device recovery. The wrapper does not terminate the game automatically.
+
+## Robustness candidate failed; checkpoints and pacing
+
+The restarted process started at 04:01:59 and lost its device at 04:15:14 on November 5, approximately 13 minutes later. All four robustness features were enabled. The native fault report again identified `WRITE_INVALID` in address interval 0–4095, now with six `INSTRUCTION_POINTER_UNKNOWN` entries. The first logged error was again `vkQueueSubmit`; presentations then stopped. A new minidump showed the query worker in the wrapper's `Sleep` backoff, confirming that the CPU busy-loop mitigation was active, while the GPU failure persisted.
+
+Unlike the preceding captures, this run has samples from before the failure. In the final two minutes the adapter reported 99% utilization, 83–84 °C and roughly 9956 MiB used / 1152 MiB free memory, without a growing memory allocation trend in that interval. These adapter-wide samples do not establish either thermal instability or memory exhaustion. They motivate testing lower sustained load without changing driver clocks or game settings.
+
+The next experimental preset adds:
+
+```ini
+[experiments]
+FrameLimit=30
+[diagnostics]
+RuntimeTrace=1
+GpuCheckpoints=1
+```
+
+`FrameLimit` accepts 10–240 FPS; zero or an out-of-range value disables it. It spaces presentation calls per queue using a monotonic host clock and sleeping, including the GDPA presentation path. It does not alter swapchain settings, semaphore lists, native results or submission order. An already slower workload remains slower; lowering the cap is an experiment, not a demonstrated remedy for the invalid write.
+
+`GpuCheckpoints` also requires `RuntimeTrace=1` and native `VK_NV_device_diagnostic_checkpoints` support. The wrapper tracks command-buffer allocation/lifetime and current bound graphics, compute and RT pipelines. It inserts opaque tokens before and after draw/dispatch commands and selected native RT/AS operations. It does not insert commands at arbitrary pipeline bindings or command-buffer boundaries, which could fall between suspended render-pass instances. A device-loss result triggers a bounded report from all known queues, once per device. No healthy-device checkpoint query or deliberately induced GPU fault is used.
+
+Marker metadata is bounded to 65,536 entries. Old entries from long-lived reusable command buffers can expire; reports label expired/external tokens instead of attributing them to new entries. The instrumented operations do not cover every Vulkan command, and checkpoint stages give execution progress rather than proof of the exact faulting instruction. Compute and graphics pipeline handles can be correlated with logged shader modules; deferred RT creation logs its input stages without reading incomplete output handles.
+
+Synthetic tests cover marker order, argument forwarding, pipeline identity, bounded reporting/history, command/device lifetime and frame-pacing deadlines/results. A real GPU compute test passed with checkpoints enabled. These tests establish instrumentation behavior, not successful execution of the failing game scene or sustained stability.
 
 ## Remaining work
 
@@ -94,3 +118,5 @@ Separately, query polling now yields the CPU for 10 ms only after the native fun
 - [AMD FSR integration](https://gpuopen.com/manuals/fidelityfx_sdk/techniques/super-resolution-upscaler/)
 - [Vulkan robustness guarantees and limits](https://docs.vulkan.org/guide/latest/robustness.html)
 - [Device-fault address types](https://docs.vulkan.org/refpages/latest/refpages/source/VkDeviceFaultAddressTypeKHR.html)
+- [NVIDIA device diagnostic checkpoints](https://docs.vulkan.org/refpages/latest/refpages/source/VK_NV_device_diagnostic_checkpoints.html)
+- [Checkpoint command restrictions](https://docs.vulkan.org/refpages/latest/refpages/source/vkCmdSetCheckpointNV.html)

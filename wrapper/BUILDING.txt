@@ -5,8 +5,9 @@ The current build reaches menus and displays a 3D scene in DOOM: The Dark Ages
 on GTX 1080 Ti / NVIDIA 582.28. The user confirmed normal operation on 2026-11-03.
 A later gameplay session ended in a confirmed GPU device-loss hang after about
 30 minutes. A repeat failure after approximately two hours on 2026-11-05
-reported an invalid GPU memory write. The robustness candidate below is under
-gameplay testing; sustained stability, FSR and other GPUs remain unverified.
+reported an invalid GPU memory write. The robustness candidate below failed to
+prevent a repeat after 13 minutes. Sustained stability, FSR and other GPUs remain
+unverified; checkpoints and frame pacing support further investigation.
 
 Build on Windows with PowerShell, llvm-mingw x86_64 and Vulkan-Headers:
 
@@ -76,6 +77,33 @@ means skipped. It verifies null reads return zero, null and out-of-range stores
 are discarded, a valid write completes and other buffer data is preserved.
 It does not exercise the game shaders, image robustness or buffer-device-address
 accesses, nor establish sustained gameplay stability.
+
+GPU checkpoints and frame pacing (off by default):
+
+  [experiments]
+  PascalRTGate=1
+  RobustAccess=1
+  FrameLimit=30
+  [diagnostics]
+  RuntimeTrace=1
+  GpuCheckpoints=1
+  ShaderDumpDirectory=
+
+FrameLimit accepts 10-240 FPS and delays presentations per queue on the host;
+zero/invalid values disable it. GpuCheckpoints requires RuntimeTrace=1 and native
+VK_NV_device_diagnostic_checkpoints support. [CHECKPOINT] confirms enablement and
+the first instrumented command. [CHECKPOINT-FAULT] is emitted after native device
+loss, with bounded history and explicit reporting of expired/external tokens.
+These options are a diagnostic/load-reduction experiment, not a proven fix.
+
+  .\build\checkpoints_test.exe
+
+Build this test with -BuildTests. Use the above INI; it runs synthetic API calls,
+checks marker ordering, arguments, pipeline identity, bounded history/reporting,
+lifetime cleanup and pacing. It does not cause a real GPU fault. The real GPU
+test above can also run with GpuCheckpoints=1; it exercises checkpoint insertion
+while reading back a compute result, without querying a healthy device's fault
+checkpoints. See docs/TECHNICAL.md for coverage and limitations.
 
 Changes in this branch:
 - Preserve wrapper resolvers and extension enumeration when obtained through GIPA.

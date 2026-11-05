@@ -90,6 +90,9 @@ inline VkResult VKAPI_CALL CreateCompute(VkDevice device, VkPipelineCache cache,
         log::Logf("[PIPELINE] compute[%u] module=%p entry=%s", i, (void*)infos[i].stage.module, infos[i].stage.pName);
     const VkResult result = realCompute(device, cache, count, infos, allocator, pipelines);
     log::Logf("[PIPELINE] compute count=%u result=%d", count, result);
+    if (result == VK_SUCCESS) for (uint32_t i=0; i<count; ++i)
+        log::Logf("[PIPELINE-MAP] compute pipeline=%p module=%p entry=%s",
+            (void*)pipelines[i], (void*)infos[i].stage.module, infos[i].stage.pName);
     return result;
 }
 
@@ -102,6 +105,11 @@ inline VkResult VKAPI_CALL CreateGraphics(VkDevice device, VkPipelineCache cache
                 infos[i].pStages[j].stage, (void*)infos[i].pStages[j].module, infos[i].pStages[j].pName);
     const VkResult result = realGraphics(device, cache, count, infos, allocator, pipelines);
     log::Logf("[PIPELINE] graphics count=%u result=%d", count, result);
+    if (result == VK_SUCCESS) for (uint32_t i=0; i<count; ++i)
+        for (uint32_t j=0; j<infos[i].stageCount; ++j)
+            log::Logf("[PIPELINE-MAP] graphics pipeline=%p stage=%x module=%p entry=%s",
+                (void*)pipelines[i], infos[i].pStages[j].stage,
+                (void*)infos[i].pStages[j].module, infos[i].pStages[j].pName);
     return result;
 }
 

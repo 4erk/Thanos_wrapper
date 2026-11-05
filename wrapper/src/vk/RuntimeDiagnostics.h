@@ -1,5 +1,7 @@
 #pragma once
 #include "ShaderDiagnostics.h"
+#include "GpuCheckpoints.h"
+#include "FramePacer.h"
 #include <utility>
 #include <unordered_map>
 #include <algorithm>
@@ -38,6 +40,7 @@ inline void OnDeviceCreated(VkDevice device, PFN_vkGetDeviceProcAddr resolve, bo
 
 inline void ReportFault(VkDevice device)
 {
+    checkpoints::Report(device);
     PFN_vkGetDeviceFaultInfoEXT query = nullptr;
     {
         std::lock_guard<std::mutex> lock(faultMutex);
@@ -73,6 +76,11 @@ inline void ReportFault(VkDevice device)
 template<class First, class... Rest> inline void CheckFault(VkResult, First, Rest...) {}
 template<class... Rest> inline void CheckFault(VkResult result, VkDevice device, Rest...)
 { if (result == VK_ERROR_DEVICE_LOST) ReportFault(device); }
+template<class... Rest> inline void CheckFault(VkResult result, VkQueue queue, Rest...)
+{
+    if (result == VK_ERROR_DEVICE_LOST && checkpoints::Requested())
+        if (auto device=checkpoints::QueueDevice(queue)) ReportFault(device);
+}
 
 inline bool Due(std::atomic<ULONGLONG>& next, ULONGLONG now, ULONGLONG interval)
 {
@@ -123,6 +131,7 @@ inline PFN_vkDestroyDevice realDestroyDevice = nullptr;
 
 inline void VKAPI_CALL DestroyDevice(VkDevice device, const VkAllocationCallbacks* allocator)
 {
+    checkpoints::ForgetDevice(device);
     if (Enabled()) {
         std::lock_guard<std::mutex> lock(faultMutex);
         faultDevices.erase(device);
@@ -137,6 +146,7 @@ inline VkResult VKAPI_CALL QueueSubmit(VkQueue q, uint32_t n, const VkSubmitInfo
 }
 inline VkResult VKAPI_CALL QueuePresent(VkQueue q, const VkPresentInfoKHR* info)
 {
+    pacing::BeforePresent(q);
     if (Enabled()) presents.fetch_add(1, std::memory_order_relaxed);
     return Call("vkQueuePresentKHR", realPresent, q, info);
 }

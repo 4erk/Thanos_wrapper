@@ -1,4 +1,4 @@
-﻿//#include "pch.h"
+//#include "pch.h"
 #include "VkHooks.h"
 #include "VkProxyExports.h"
 #include "VkProxyState.h"
@@ -28,7 +28,7 @@
 #include <type_traits>
 using namespace thanosray::log;
 static const char* kVkHooksBuildId =
-"VkHooks.cpp BUILD_ID 4erk-doom-robust-access-6";
+"VkHooks.cpp BUILD_ID 4erk-doom-checkpoints-pacing-8";
 // ---- Forward decls (must appear AFTER Vulkan types are visible) ----
 
 // ============================================================================
@@ -959,7 +959,8 @@ static VkResult VKAPI_CALL Hook_vkAcquireNextImage2KHR(
         {
             if (g_real_vkCmdTraceRaysKHR) {
                 thanosray::log::LogOncef("native.trace.direct", "[RT] Native vkCmdTraceRaysKHR %ux%ux%u", width, height, depth);
-                g_real_vkCmdTraceRaysKHR(commandBuffer, raygen, miss, hit, callable, width, height, depth);
+                checkpoints::Work("vkCmdTraceRaysKHR", VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
+                    g_real_vkCmdTraceRaysKHR, commandBuffer, raygen, miss, hit, callable, width, height, depth);
                 return;
             }
             thanosray::log::LogOncef("native.trace.missing", "[RT] ERROR: native vkCmdTraceRaysKHR unavailable");
@@ -980,7 +981,8 @@ static VkResult VKAPI_CALL Hook_vkAcquireNextImage2KHR(
         {
             if (g_real_vkCmdTraceRaysIndirectKHR) {
                 thanosray::log::LogOncef("native.trace.indirect", "[RT] Native vkCmdTraceRaysIndirectKHR");
-                g_real_vkCmdTraceRaysIndirectKHR(commandBuffer, raygen, miss, hit, callable, address);
+                checkpoints::Work("vkCmdTraceRaysIndirectKHR", VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
+                    g_real_vkCmdTraceRaysIndirectKHR, commandBuffer, raygen, miss, hit, callable, address);
             }
         }
 
@@ -991,7 +993,8 @@ static VkResult VKAPI_CALL Hook_vkAcquireNextImage2KHR(
         {
             if (g_real_vkCmdTraceRaysIndirect2KHR) {
                 thanosray::log::LogOncef("native.trace.indirect2", "[RT] Native vkCmdTraceRaysIndirect2KHR");
-                g_real_vkCmdTraceRaysIndirect2KHR(commandBuffer, address);
+                checkpoints::Work("vkCmdTraceRaysIndirect2KHR", VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
+                    g_real_vkCmdTraceRaysIndirect2KHR, commandBuffer, address);
             }
         }
 
@@ -1035,6 +1038,12 @@ static VkResult VKAPI_CALL Hook_vkAcquireNextImage2KHR(
             }
             VkResult result = g_real_vkCreateRayTracingPipelinesKHR(device, deferredOperation, pipelineCache, createInfoCount, pCreateInfos, pAllocator, pPipelines);
             thanosray::log::Logf("[PIPELINE] raytracing count=%u result=%d", createInfoCount, result);
+            // Deferred creation may not have written output handles yet.
+            for (uint32_t i=0; i<createInfoCount; ++i)
+                for (uint32_t j=0; j<pCreateInfos[i].stageCount; ++j)
+                    thanosray::log::Logf("[PIPELINE-MAP] raytracing index=%u stage=%x module=%p entry=%s",
+                        i, pCreateInfos[i].pStages[j].stage,
+                        (void*)pCreateInfos[i].pStages[j].module, pCreateInfos[i].pStages[j].pName);
             return result;
         }
 
@@ -1114,7 +1123,15 @@ static VkResult VKAPI_CALL Hook_vkAcquireNextImage2KHR(
                 "[AS] vkCmdBuildAccelerationStructuresKHR(cb=%p infoCount=%u)", (void*)cb, infoCount);
 
             if (g_real_vkCmdBuildAccelerationStructuresKHR) {
-                g_real_vkCmdBuildAccelerationStructuresKHR(cb, infoCount, pInfos, ppBuildRangeInfos);
+                if (runtime::Enabled() && pInfos) {
+                    static std::atomic<uint32_t> warnings{0};
+                    for (uint32_t i=0; i<infoCount; ++i)
+                        if (!pInfos[i].scratchData.deviceAddress && warnings.fetch_add(1)<16)
+                            thanosray::log::Logf("[GPU-INPUT-WARN] AS build cb=%p index=%u scratchAddress=0 geometries=%u mode=%d",
+                                (void*)cb,i,pInfos[i].geometryCount,pInfos[i].mode);
+                }
+                checkpoints::Work("vkCmdBuildAccelerationStructuresKHR", VK_PIPELINE_BIND_POINT_MAX_ENUM,
+                    g_real_vkCmdBuildAccelerationStructuresKHR, cb, infoCount, pInfos, ppBuildRangeInfos);
             }
         }
 
@@ -1142,7 +1159,8 @@ static VkResult VKAPI_CALL Hook_vkAcquireNextImage2KHR(
                 (int)(pInfo ? pInfo->mode : 0));
 
             if (g_real_vkCmdCopyAccelerationStructureKHR) {
-                g_real_vkCmdCopyAccelerationStructureKHR(cb, pInfo);
+                checkpoints::Work("vkCmdCopyAccelerationStructureKHR", VK_PIPELINE_BIND_POINT_MAX_ENUM,
+                    g_real_vkCmdCopyAccelerationStructureKHR, cb, pInfo);
             }
         }
 
@@ -1537,7 +1555,7 @@ if (std::strcmp(pName, "vkCmdClearColorImage") == 0) {
 
             if (std::strcmp(pName, "vkQueuePresentKHR") == 0) {
                 if (!g_gdpa_vkQueuePresentKHR) {
-                    g_gdpa_vkQueuePresentKHR = (PFN_vkQueuePresentKHR)fn;
+                    g_gdpa_vkQueuePresentKHR = (PFN_vkQueuePresentKHR)runtime::Wrap(pName,fn);
                     thanosray::log::Logf("[GDPA] captured real: vkQueuePresentKHR=%p", (void*)g_gdpa_vkQueuePresentKHR);
                 }
                 return (PFN_vkVoidFunction)&HookGDPA_vkQueuePresentKHR;
@@ -1579,7 +1597,7 @@ if (std::strcmp(pName, "vkCmdClearColorImage") == 0) {
 
 
 
-            return runtime::Wrap(pName, diagnostics::Wrap(pName, fn));
+            return checkpoints::Wrap(pName, runtime::Wrap(pName, diagnostics::Wrap(pName, fn)));
         }
 
         static PFN_vkVoidFunction VKAPI_CALL Hook_vkGetInstanceProcAddr(VkInstance instance, const char* pName)
@@ -1655,7 +1673,7 @@ if (std::strcmp(pName, "vkCmdClearColorImage") == 0) {
             }
 
 
-            return runtime::Wrap(pName, diagnostics::Wrap(pName, fn));
+            return checkpoints::Wrap(pName, runtime::Wrap(pName, diagnostics::Wrap(pName, fn)));
         }
 
         static bool IsRtExt(const char* n)
@@ -2018,6 +2036,8 @@ if (std::strcmp(pName, "vkCmdClearColorImage") == 0) {
                 driverSupported.count(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME);
             const bool useDeviceFault = runtime::Enabled() && nativeFault.deviceFault &&
                 driverSupported.count(VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
+            const bool useCheckpoints = runtime::Enabled() && checkpoints::Requested() &&
+                driverSupported.count(VK_NV_DEVICE_DIAGNOSTIC_CHECKPOINTS_EXTENSION_NAME);
             auto addExtension = [&](const char* name) {
                 if (std::none_of(driverExts.begin(), driverExts.end(),
                     [&](const char* old) { return std::strcmp(old, name) == 0; }))
@@ -2029,6 +2049,7 @@ if (std::strcmp(pName, "vkCmdClearColorImage") == 0) {
             }
             if (useNativeRT) addExtension(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME);
             if (useDeviceFault) addExtension(VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
+            if (useCheckpoints) addExtension(VK_NV_DEVICE_DIAGNOSTIC_CHECKPOINTS_EXTENSION_NAME);
             thanosray::log::Logf("[NATIVE-RT] accelerationStructure=%d rayTracingPipeline=%d",
                 useNativeAS, useNativeRT);
 
@@ -2085,8 +2106,10 @@ if (std::strcmp(pName, "vkCmdClearColorImage") == 0) {
             thanosray::log::Logf("[vkCreateDevice] calling real vkCreateDevice...");
             VkResult r = st.real_vkCreateDevice(physicalDevice, &patched, pAllocator, pDevice);
             thanosray::log::Logf("[vkCreateDevice] real returned: %d", (int)r);
-            if (r == VK_SUCCESS)
+            if (r == VK_SUCCESS) {
                 runtime::OnDeviceCreated(*pDevice, st.real_vkGetDeviceProcAddr, useDeviceFault);
+                checkpoints::OnDevice(*pDevice, st.real_vkGetDeviceProcAddr, patched, useCheckpoints);
+            }
 
             EnsureShadowLiftDefaultsLate();
             return r;
@@ -3632,7 +3655,7 @@ static VkResult VKAPI_CALL Hook_vkQueuePresentKHR(VkQueue queue, const VkPresent
         {
             const char* const* names = ExportNameTable();
             for (int i = 0; i < kProcTableSize; ++i)
-                g_procTable[i] = (void*)runtime::Wrap(names[i], diagnostics::Wrap(names[i], (PFN_vkVoidFunction)g_procTable[i]));
+                g_procTable[i] = (void*)checkpoints::Wrap(names[i], runtime::Wrap(names[i], diagnostics::Wrap(names[i], (PFN_vkVoidFunction)g_procTable[i])));
             static bool once = false;
             if (!once) {
                 once = true;
